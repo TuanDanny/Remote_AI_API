@@ -6,6 +6,7 @@ import { LocalTools } from './tools.js';
 import { AgentRunner } from './agent.js';
 import { HeartbeatService } from './heartbeat.js';
 import { SessionDiscoveryService } from './sessionDiscovery.js';
+import { PlatformWatcher } from './platformWatcher.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_KEY || '';
@@ -232,6 +233,10 @@ export async function main() {
   } catch (err: any) {
     console.error('[SessionDiscovery] Sync error:', err?.message || err);
   }
+
+  // Start live bi-directional platform session watcher
+  const platformWatcher = new PlatformWatcher(discovery);
+  platformWatcher.start();
 
   // Subscribe to device updates so heartbeat stays in sync with changes from Web UI
   const deviceChannel = supabase
