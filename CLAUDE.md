@@ -47,3 +47,32 @@ npm --prefix daemon test
 # Verify Web production build
 npm --prefix apps/web run build
 ```
+
+## 4. Three.js Skills Playbook & Rules of Engagement (Quy tắc sử dụng 13 Three.js Skills)
+
+Whenever working on 3D visualizations, canvases, interactive WebGL/WebGPU graphics, or React Three Fiber components, **proactively invoke the matching skill via the `Skill` tool before writing code**.
+
+### Invocation Decision Matrix
+
+| Task / Domain | Primary Skill | Description & Key Constraints |
+| :--- | :--- | :--- |
+| **Scene Setup & Core** | `threejs-fundamentals` | Scene, Camera, Renderer, animation loop, resize handling, WebGL and WebGPU/TSL (three.js r186). |
+| **Geometry & Buffers** | `threejs-geometry` | Built-in shapes, 3D text, BufferGeometry, merging, `InstancedMesh`, `BatchedMesh`, point clouds, lines. |
+| **Materials & Shading** | `threejs-materials` | PBR (`MeshStandardMaterial`, `MeshPhysicalMaterial`), toon, unlit, blending, stencil, WebGPU node-materials, and TSL. |
+| **Lighting & Shadows** | `threejs-lighting` | Physical lighting units, shadow maps, HDR environment lighting (`HDRLoader` replacing `RGBELoader`), light probes. |
+| **Textures & Mappings** | `threejs-textures` | Texture loading, color spaces (`SRGBColorSpace`), UV channels, canvas/HDR/KTX2 textures, render targets, memory disposal. |
+| **Skeletal & Clips** | `threejs-animation` | Keyframes, `AnimationMixer`, skeletal & morph-target animation, procedural motion, clip blending. |
+| **Model Loading** | `threejs-loaders` | glTF/GLB loading with Draco, meshopt, KTX2, HDR/EXR environments, progress tracking, complete memory cleanup. |
+| **Custom Shaders** | `threejs-shaders` | Custom GLSL shaders (`ShaderMaterial`, `RawShaderMaterial`), shader chunks, porting to TSL/WebGPU. |
+| **Post-Processing** | `threejs-postprocessing` | `EffectComposer` pass chains, bloom, depth of field, ambient occlusion, WebGPU `RenderPipeline`. |
+| **Mouse & Controls** | `threejs-interaction` | Raycasting for click/hover, OrbitControls, transform gizmos, drag/box selection. |
+| **Performance Audit** | `threejs-performance` | Draw calls reduction, merging/instancing, GPU memory leaks, fill rate, frame rate optimization. |
+| **React Three Fiber** | `threejs-react-three-fiber` | React Three Fiber 9 and `@react-three/drei` 10.7, hooks (`useFrame`, `useThree`), canvas layout. |
+| **Asset Optimization** | `threejs-asset-pipeline` | Shrinking glTF/GLB assets with `gltf-transform` (Draco, Meshopt, KTX2, WebP/AVIF textures). |
+
+### Core Rules for 3D Development:
+1. **Always clean up GPU resources:** Call `geometry.dispose()`, `material.dispose()`, and `texture.dispose()` on unmount/cleanup to prevent WebGL memory leaks.
+2. **Prefer instancing over multiple meshes:** Use `InstancedMesh` or `BatchedMesh` when rendering repeated objects to minimize draw calls.
+3. **Correct color spaces:** Set `texture.colorSpace = THREE.SRGBColorSpace` for color/diffuse maps; leave linear for normal, roughness, and metalness maps.
+4. **Use modern loaders:** Default to glTF (`.glb` / `.gltf`) with Draco/meshopt compression; use `HDRLoader` for environment maps.
+
