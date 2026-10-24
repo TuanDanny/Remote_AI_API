@@ -69,6 +69,12 @@ export function Sidebar({
   const [sessionSearch, setSessionSearch] = useState('');
   const [viewScope, setViewScope] = useState<'current_folder' | 'all'>('current_folder');
 
+  React.useEffect(() => {
+    if (currentFolder) {
+      setFolderInput(currentFolder);
+    }
+  }, [currentFolder]);
+
   const displayFolder = currentFolder || device?.working_directory || 'D:\\Project';
 
   const handleSaveFolder = () => {

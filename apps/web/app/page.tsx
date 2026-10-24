@@ -24,18 +24,26 @@ export default function DashboardPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [selectedModel, setSelectedModel] = useState('cx/gpt-6.1-sol');
+  const [selectedFolder, setSelectedFolder] = useState<string>('D:\\Project');
   const [showDial, setShowDial] = useState(false);
 
   // Load initial data
   useEffect(() => {
     async function loadData() {
       const { data: dev } = await supabase.from('devices').select('*').limit(1).maybeSingle();
-      if (dev) setDevice(dev as Device);
+      if (dev) {
+        setDevice(dev as Device);
+        if (dev.working_directory) {
+          setSelectedFolder(dev.working_directory);
+        }
+      }
 
       const { data: sess } = await supabase.from('sessions').select('*').order('created_at', { ascending: false });
       if (sess && sess.length > 0) {
         setSessions(sess as Session[]);
         setActiveSessionId(sess[0].id);
+        const firstFolder = parseSessionMeta(sess[0] as Session).cwd;
+        if (firstFolder) setSelectedFolder(firstFolder);
       }
     }
     loadData();
@@ -120,6 +128,15 @@ export default function DashboardPage() {
     }
   }, [activeSessionId, sessions]);
 
+  const handleSelectSession = (id: string) => {
+    setActiveSessionId(id);
+    const chosen = sessions.find((s) => s.id === id);
+    if (chosen) {
+      const folder = parseSessionMeta(chosen).cwd;
+      if (folder) setSelectedFolder(folder);
+    }
+  };
+
   const handleModelChange = async (newModel: string) => {
     setSelectedModel(newModel);
     if (activeSessionId) {
@@ -129,25 +146,41 @@ export default function DashboardPage() {
   };
 
   const handleUpdateFolder = async (newFolder: string) => {
+    setSelectedFolder(newFolder);
+
+    // 1. Update device working directory on Supabase
     if (device?.id) {
       await supabase.from('devices').update({ working_directory: newFolder }).eq('id', device.id);
       setDevice((prev) => (prev ? { ...prev, working_directory: newFolder } : null));
     }
+
+    // 2. Update active session cwd in system_prompt metadata
     if (activeSessionId) {
-      await supabase.from('sessions').update({ working_directory: newFolder }).eq('id', activeSessionId);
-      setSessions((prev) => prev.map((s) => (s.id === activeSessionId ? { ...s, working_directory: newFolder } : s)));
+      const active = sessions.find((s) => s.id === activeSessionId);
+      let existingMeta = {};
+      try {
+        existingMeta = JSON.parse(active?.system_prompt || '{}');
+      } catch {}
+      const updatedMeta = JSON.stringify({ ...existingMeta, cwd: newFolder });
+
+      await supabase.from('sessions').update({ system_prompt: updatedMeta }).eq('id', activeSessionId);
+      setSessions((prev) => prev.map((s) => (s.id === activeSessionId ? { ...s, system_prompt: updatedMeta } : s)));
     }
   };
 
   const handleCreateSession = async () => {
-    const activeFolder = activeSession?.working_directory || device?.working_directory || 'D:\\Project';
+    const meta = JSON.stringify({
+      cwd: selectedFolder,
+      source: 'remoteai'
+    });
+
     const { data } = await supabase
       .from('sessions')
       .insert({
         title: 'New Session',
         model: selectedModel,
         status: 'idle',
-        working_directory: activeFolder,
+        system_prompt: meta,
         ...(device?.id ? { device_id: device.id } : {})
       })
       .select()
@@ -175,10 +208,12 @@ export default function DashboardPage() {
     let targetId = activeSessionId;
     const modelToUse = options?.model?.key || selectedModel;
     const effortToUse = options?.effort || 'High';
-    const currentFolder = activeSession?.working_directory || device?.working_directory || 'D:\\Project';
 
     if (!targetId) {
-      // Create session first if none active
+      const meta = JSON.stringify({
+        cwd: selectedFolder,
+        source: 'remoteai'
+      });
       const { data: newSess } = await supabase
         .from('sessions')
         .insert({
@@ -186,7 +221,7 @@ export default function DashboardPage() {
           model: modelToUse,
           effort: effortToUse,
           status: 'idle',
-          working_directory: currentFolder,
+          system_prompt: meta,
           ...(device?.id ? { device_id: device.id } : {})
         })
         .select()
@@ -215,10 +250,6 @@ export default function DashboardPage() {
     return Math.min(100, Math.max(1, Math.round((approxTokens / 200000) * 100)));
   }, [messages]);
 
-  const activeFolder = activeSession
-    ? parseSessionMeta(activeSession).cwd
-    : device?.working_directory || 'D:\\Project';
-
   return (
     <PasscodeGate>
       <div className="flex h-screen w-full bg-[#0d1117] overflow-hidden">
@@ -226,8 +257,8 @@ export default function DashboardPage() {
           device={device}
           sessions={sessions}
           activeSessionId={activeSessionId}
-          currentFolder={activeFolder}
-          onSelectSession={setActiveSessionId}
+          currentFolder={selectedFolder}
+          onSelectSession={handleSelectSession}
           onCreateSession={handleCreateSession}
           onDeleteSession={handleDeleteSession}
           onUpdateFolder={handleUpdateFolder}
@@ -290,7 +321,7 @@ export default function DashboardPage() {
             messages={messages}
             sessionStatus={activeSession?.status || 'idle'}
             sessionTitle={activeSession?.title}
-            sessionFolder={activeFolder}
+            sessionFolder={selectedFolder}
             sessionModel={activeSession?.model}
           />
 
