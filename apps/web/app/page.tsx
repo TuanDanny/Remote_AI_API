@@ -13,7 +13,7 @@ export default function DashboardPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [prompt, setPrompt] = useState('');
-  const [selectedModel, setSelectedModel] = useState('anthropic/claude-3.5-sonnet');
+  const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-5');
 
   // Load initial data
   useEffect(() => {
@@ -102,6 +102,21 @@ export default function DashboardPage() {
     };
   }, [activeSessionId]);
 
+  useEffect(() => {
+    const current = sessions.find((s) => s.id === activeSessionId);
+    if (current?.model) {
+      setSelectedModel(current.model);
+    }
+  }, [activeSessionId, sessions]);
+
+  const handleModelChange = async (newModel: string) => {
+    setSelectedModel(newModel);
+    if (activeSessionId) {
+      await supabase.from('sessions').update({ model: newModel }).eq('id', activeSessionId);
+      setSessions((prev) => prev.map((s) => (s.id === activeSessionId ? { ...s, model: newModel } : s)));
+    }
+  };
+
   const handleCreateSession = async () => {
     const { data } = await supabase
       .from('sessions')
@@ -166,12 +181,15 @@ export default function DashboardPage() {
             </div>
             <select
               value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
+              onChange={(e) => handleModelChange(e.target.value)}
               className="bg-[#0d1117] border border-[#30363d] rounded-lg px-2.5 py-1 text-xs text-gray-300 outline-none focus:border-[#58a6ff]"
             >
+              <option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
+              <option value="claude-haiku-4-5">Claude Haiku 4.5</option>
+              <option value="claude-claude_anti">Claude Anti</option>
+              <option value="modelapi/gpt-6-sol">GPT-6 Sol</option>
               <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
               <option value="openai/gpt-4o">GPT-4o</option>
-              <option value="deepseek/deepseek-chat">DeepSeek V3</option>
             </select>
           </header>
 

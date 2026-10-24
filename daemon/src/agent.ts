@@ -119,7 +119,8 @@ export class AgentRunner {
   async runStep(
     messages: any[],
     onStream: (chunk: string) => void | Promise<void>,
-    onToolExecute: (toolCall: ToolCall) => Promise<boolean>
+    onToolExecute: (toolCall: ToolCall) => Promise<boolean>,
+    modelOverride?: string
   ): Promise<{ responseText: string; toolCalls: ToolCall[] }> {
     const url = `${this.routerBaseUrl}/chat/completions`;
 
@@ -130,7 +131,7 @@ export class AgentRunner {
         'Authorization': `Bearer ${this.apiKey}`
       },
       body: JSON.stringify({
-        model: this.model,
+        model: modelOverride || this.model,
         messages,
         tools: this.getToolDefinitions(),
         stream: this.stream
@@ -285,12 +286,14 @@ export class AgentRunner {
     _sessionId: string,
     userPrompt: string,
     onStream: (chunk: string) => void | Promise<void>,
-    onToolExecute?: (toolCall: ToolCall) => Promise<boolean>
+    onToolExecute?: (toolCall: ToolCall) => Promise<boolean>,
+    modelOverride?: string
   ): Promise<{ responseText: string; toolCalls: ToolCall[] }> {
     return this.runStep(
       [{ role: 'user', content: userPrompt }],
       onStream,
-      onToolExecute || (async () => true)
+      onToolExecute || (async () => true),
+      modelOverride
     );
   }
 }

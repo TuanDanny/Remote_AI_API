@@ -128,7 +128,8 @@ export function createCoordinator(options?: {
         async (toolCall) => {
           console.log(`[Tool] Running ${toolCall.name} with args:`, toolCall.args);
           return true;
-        }
+        },
+        session?.model || defaultModel
       );
 
       // Save final content and tool_calls
