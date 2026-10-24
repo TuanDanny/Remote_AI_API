@@ -16,6 +16,8 @@ export interface Session {
   device_id: string;
   title: string;
   model: string;
+  effort?: string;
+  working_directory?: string;
   system_prompt?: string;
   status: SessionStatus;
   created_at: string;
@@ -40,6 +42,8 @@ export interface Message {
   role: MessageRole;
   content: string;
   reasoning?: string;
+  model?: string;
+  effort?: string;
   tool_calls?: ToolCall[];
   created_at: string;
 }

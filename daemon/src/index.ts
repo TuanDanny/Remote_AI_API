@@ -116,8 +116,34 @@ export function createCoordinator(options?: {
     let accumulatedContent = '';
     let accumulatedReasoning = '';
 
+    const activeModel = messageRow.model || session?.model || defaultModel;
+    const activeEffort = messageRow.effort || session?.effort;
+
+    // Determine working directory priority: session.working_directory -> device.working_directory -> workspaceRoot
+    let activeWorkspace = session?.working_directory;
+    if (!activeWorkspace) {
+      const { data: dev } = await supabase
+        .from('devices')
+        .select('working_directory')
+        .eq('id', deviceId)
+        .maybeSingle();
+      if (dev?.working_directory) {
+        activeWorkspace = dev.working_directory;
+      }
+    }
+    activeWorkspace = activeWorkspace || heartbeat.getWorkingDirectory() || workspaceRoot;
+
+    // Scope tools and agent to activeWorkspace
+    const scopedTools = new LocalTools(activeWorkspace);
+    const scopedAgent = new AgentRunner({
+      routerBaseUrl,
+      apiKey: routerApiKey,
+      model: activeModel,
+      tools: scopedTools
+    });
+
     try {
-      const result = await agent.runLoop(
+      const result = await scopedAgent.runLoop(
         conversationHistory,
         async (chunk: string) => {
           accumulatedContent += chunk;
@@ -134,10 +160,11 @@ export function createCoordinator(options?: {
             .eq('id', assistantMsg.id);
         },
         async (toolCall) => {
-          console.log(`[Tool] Running ${toolCall.name} with args:`, toolCall.args);
+          console.log(`[Tool] Running ${toolCall.name} in ${activeWorkspace} with args:`, toolCall.args);
           return true;
         },
-        session?.model || defaultModel
+        activeModel,
+        activeEffort
       );
 
       // Save final content, reasoning and tool_calls
@@ -188,6 +215,22 @@ export async function main() {
   await heartbeat.start();
   console.log('🟢 Heartbeat service active (Online).');
 
+  // Subscribe to device updates so heartbeat stays in sync with changes from Web UI
+  const deviceChannel = supabase
+    .channel('devices-channel')
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'devices', filter: `id=eq.${coordinator.heartbeat['deviceId'] || DEVICE_ID}` },
+      (payload) => {
+        const updated = payload.new as any;
+        if (updated?.working_directory) {
+          heartbeat.setWorkingDirectory(updated.working_directory);
+          console.log(`[Heartbeat] Working directory updated to: ${updated.working_directory}`);
+        }
+      }
+    )
+    .subscribe();
+
   // Subscribe to new user messages via Supabase Realtime
   const channel = supabase
     .channel('messages-channel')
@@ -207,7 +250,7 @@ export async function main() {
 
   console.log('👂 Listening for incoming sessions & prompts from Vercel Web...');
 
-  return { coordinator, channel };
+  return { coordinator, channel, deviceChannel };
 }
 
 // Auto-run if executed as main process

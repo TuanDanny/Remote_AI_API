@@ -48,12 +48,13 @@ const DEFAULT_COMMANDS = [
   { key: 'tasks', name: '/tasks', description: 'Turn this into a to-do list' }
 ];
 const DEFAULT_MODELS = [
-  { key: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', tag: 'Fast & Smart' },
-  { key: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', tag: 'Instant' },
-  { key: 'claude-claude_anti', name: 'Claude Anti', tag: 'Special' },
-  { key: 'modelapi/gpt-6-sol', name: 'GPT-6 Sol', tag: 'Powerful' }
+  { key: 'cx/gpt-6.1-sol', name: 'GPT-6.1 Sol', tag: 'Reasoning' },
+  { key: 'ag/gemini-3.8-flash-high', name: 'Gemini 3.8 Flash High', tag: 'Fast' },
+  { key: 'cx/gpt-6-astra', name: 'GPT-6 Astra', tag: 'Coding & Speed' },
+  { key: 'cx/gpt-6-luna[1m]', name: 'GPT-6 Luna [1M]', tag: '1M Context' },
+  { key: 'ag/claude-opus-4-6-thinking', name: 'Claude Opus 4.6', tag: 'Thinking' }
 ];
-const DEFAULT_EFFORTS = ['Low', 'Medium', 'High', 'Extra', 'Max'];
+const DEFAULT_EFFORTS = ['Light', 'Medium', 'High', 'XHigh', 'Max'];
 
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 const pathAt = (a: number[], b: number[], t: number) => {
@@ -190,7 +191,11 @@ export default function PromptBar({
 
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<string[]>([]);
-  const [modelKey, setModelKey] = useState(defaultModel || models[0]?.key || 'claude-sonnet-4-5');
+  const [modelKey, setModelKey] = useState(defaultModel || models[0]?.key || 'cx/gpt-6.1-sol');
+
+  useEffect(() => {
+    if (defaultModel) setModelKey(defaultModel);
+  }, [defaultModel]);
   const [plusOpen, setPlusOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);

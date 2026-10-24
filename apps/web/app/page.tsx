@@ -11,12 +11,11 @@ import CometDial from '../components/CometDial';
 import { Play } from 'lucide-react';
 
 const MODEL_OPTIONS = [
-  { key: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', tag: 'Fast & Smart' },
-  { key: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', tag: 'Instant' },
-  { key: 'claude-claude_anti', name: 'Claude Anti', tag: 'Special' },
-  { key: 'modelapi/gpt-6-sol', name: 'GPT-6 Sol', tag: 'Powerful' },
-  { key: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', tag: 'Standard' },
-  { key: 'openai/gpt-4o', name: 'GPT-4o', tag: 'OpenAI' }
+  { key: 'cx/gpt-6.1-sol', name: 'GPT-6.1 Sol', tag: 'Reasoning (Light-Max)' },
+  { key: 'ag/gemini-3.8-flash-high', name: 'Gemini 3.8 Flash High', tag: 'Fast' },
+  { key: 'cx/gpt-6-astra', name: 'GPT-6 Astra', tag: 'Coding & Speed' },
+  { key: 'cx/gpt-6-luna[1m]', name: 'GPT-6 Luna [1M]', tag: '1M Context' },
+  { key: 'ag/claude-opus-4-6-thinking', name: 'Claude Opus 4.6', tag: 'Thinking' }
 ];
 
 export default function DashboardPage() {
@@ -24,7 +23,7 @@ export default function DashboardPage() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-5');
+  const [selectedModel, setSelectedModel] = useState('cx/gpt-6.1-sol');
   const [showDial, setShowDial] = useState(false);
 
   // Load initial data
@@ -129,13 +128,26 @@ export default function DashboardPage() {
     }
   };
 
+  const handleUpdateFolder = async (newFolder: string) => {
+    if (device?.id) {
+      await supabase.from('devices').update({ working_directory: newFolder }).eq('id', device.id);
+      setDevice((prev) => (prev ? { ...prev, working_directory: newFolder } : null));
+    }
+    if (activeSessionId) {
+      await supabase.from('sessions').update({ working_directory: newFolder }).eq('id', activeSessionId);
+      setSessions((prev) => prev.map((s) => (s.id === activeSessionId ? { ...s, working_directory: newFolder } : s)));
+    }
+  };
+
   const handleCreateSession = async () => {
+    const activeFolder = activeSession?.working_directory || device?.working_directory || 'D:\\Project';
     const { data } = await supabase
       .from('sessions')
       .insert({
         title: 'New Session',
         model: selectedModel,
         status: 'idle',
+        working_directory: activeFolder,
         ...(device?.id ? { device_id: device.id } : {})
       })
       .select()
@@ -157,18 +169,24 @@ export default function DashboardPage() {
     }
   };
 
-  const handleSendPrompt = async (promptText: string) => {
+  const handleSendPrompt = async (promptText: string, options?: any) => {
     if (!promptText.trim()) return;
 
     let targetId = activeSessionId;
+    const modelToUse = options?.model?.key || selectedModel;
+    const effortToUse = options?.effort || 'High';
+    const currentFolder = activeSession?.working_directory || device?.working_directory || 'D:\\Project';
+
     if (!targetId) {
       // Create session first if none active
       const { data: newSess } = await supabase
         .from('sessions')
         .insert({
           title: promptText.slice(0, 30),
-          model: selectedModel,
+          model: modelToUse,
+          effort: effortToUse,
           status: 'idle',
+          working_directory: currentFolder,
           ...(device?.id ? { device_id: device.id } : {})
         })
         .select()
@@ -182,7 +200,9 @@ export default function DashboardPage() {
     await supabase.from('messages').insert({
       session_id: targetId,
       role: 'user',
-      content: promptText.trim()
+      content: promptText.trim(),
+      model: modelToUse,
+      effort: effortToUse
     });
   };
 
@@ -202,9 +222,11 @@ export default function DashboardPage() {
           device={device}
           sessions={sessions}
           activeSessionId={activeSessionId}
+          currentFolder={activeSession?.working_directory || device?.working_directory}
           onSelectSession={setActiveSessionId}
           onCreateSession={handleCreateSession}
           onDeleteSession={handleDeleteSession}
+          onUpdateFolder={handleUpdateFolder}
         />
 
         <main className="flex-1 flex flex-col h-screen">
@@ -268,12 +290,14 @@ export default function DashboardPage() {
               placeholder="Nhập yêu cầu điều khiển máy local (VD: Viết test cho file auth.ts)..."
               models={MODEL_OPTIONS}
               defaultModel={selectedModel}
+              efforts={['Light', 'Medium', 'High', 'XHigh', 'Max']}
+              defaultEffort="High"
               busy={activeSession?.status === 'running'}
               onSend={(text, options) => {
                 if (options?.model?.key && options.model.key !== selectedModel) {
                   handleModelChange(options.model.key);
                 }
-                handleSendPrompt(text);
+                handleSendPrompt(text, options);
               }}
               onStop={async () => {
                 if (activeSessionId) {

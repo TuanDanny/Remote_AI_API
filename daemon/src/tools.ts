@@ -24,8 +24,11 @@ export class LocalTools {
     const normalizedRoot = path.normalize(this.workspaceRoot);
     const normalizedPath = path.normalize(fullPath);
 
-    const relative = path.relative(normalizedRoot, normalizedPath);
-    if (relative.startsWith('..') || path.isAbsolute(relative) || !normalizedPath.startsWith(normalizedRoot)) {
+    const isWindows = process.platform === 'win32';
+    const rootCmp = isWindows ? normalizedRoot.toLowerCase() : normalizedRoot;
+    const pathCmp = isWindows ? normalizedPath.toLowerCase() : normalizedPath;
+
+    if (!pathCmp.startsWith(rootCmp)) {
       throw new Error(`Access denied: Path is outside workspace (${relPath})`);
     }
     return normalizedPath;

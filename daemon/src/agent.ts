@@ -121,9 +121,23 @@ export class AgentRunner {
     onStream: (chunk: string) => void | Promise<void>,
     onToolExecute: (toolCall: ToolCall) => Promise<boolean>,
     modelOverride?: string,
-    onReasoning?: (chunk: string) => void | Promise<void>
+    onReasoning?: (chunk: string) => void | Promise<void>,
+    effort?: string
   ): Promise<{ responseText: string; toolCalls: ToolCall[]; reasoning: string; rawToolCalls: any[] }> {
     const url = `${this.routerBaseUrl}/chat/completions`;
+
+    const requestBody: Record<string, any> = {
+      model: modelOverride || this.model,
+      messages,
+      tools: this.getToolDefinitions(),
+      stream: this.stream
+    };
+
+    if (effort) {
+      const lower = effort.toLowerCase();
+      const reasoningEffort = lower === 'light' || lower === 'low' ? 'low' : lower === 'medium' ? 'medium' : 'high';
+      requestBody.reasoning_effort = reasoningEffort;
+    }
 
     const res = await fetch(url, {
       method: 'POST',
@@ -131,12 +145,7 @@ export class AgentRunner {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.apiKey}`
       },
-      body: JSON.stringify({
-        model: modelOverride || this.model,
-        messages,
-        tools: this.getToolDefinitions(),
-        stream: this.stream
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!res.ok) {
@@ -299,6 +308,7 @@ export class AgentRunner {
     onReasoning: (chunk: string) => void | Promise<void>,
     onToolExecute: (toolCall: ToolCall) => Promise<boolean>,
     modelOverride?: string,
+    effort?: string,
     maxTurns: number = 5
   ): Promise<{ responseText: string; toolCalls: ToolCall[]; reasoning: string }> {
     const history = [...conversationHistory];
@@ -312,7 +322,8 @@ export class AgentRunner {
         onStream,
         onToolExecute,
         modelOverride,
-        onReasoning
+        onReasoning,
+        effort
       );
 
       if (step.reasoning) {

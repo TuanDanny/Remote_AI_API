@@ -22,6 +22,14 @@ export class HeartbeatService {
     this.workingDirectory = workingDirectory;
   }
 
+  setWorkingDirectory(dir: string): void {
+    this.workingDirectory = dir;
+  }
+
+  getWorkingDirectory(): string {
+    return this.workingDirectory;
+  }
+
   async start(options?: HeartbeatOptions): Promise<void> {
     // Initial upsert
     await this.ping('online');

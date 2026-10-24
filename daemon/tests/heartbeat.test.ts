@@ -80,6 +80,18 @@ describe('HeartbeatService Suite', () => {
     assert.strictEqual(upserts[0].data.status, 'offline');
   });
 
+  test('setWorkingDirectory updates working directory dynamically', async () => {
+    assert.strictEqual(heartbeat.getWorkingDirectory(), workingDir);
+    const newDir = 'D:\\Project\\AW-Car';
+    heartbeat.setWorkingDirectory(newDir);
+    assert.strictEqual(heartbeat.getWorkingDirectory(), newDir);
+
+    await heartbeat.ping('online');
+    const upserts = mockClient._getUpserts();
+    const last = upserts[upserts.length - 1];
+    assert.strictEqual(last.data.working_directory, newDir);
+  });
+
   test('start() immediately pings online and sets up periodic interval timer', async () => {
     await heartbeat.start({ intervalMs: 50, registerSignalHandlers: false });
 
