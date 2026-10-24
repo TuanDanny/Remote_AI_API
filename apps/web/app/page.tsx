@@ -204,42 +204,95 @@ export default function DashboardPage() {
   };
 
   const handleSendPrompt = async (promptText: string, options?: any) => {
-    if (!promptText.trim()) return;
+    const text = promptText.trim();
+    if (!text) return;
 
-    let targetId = activeSessionId;
     const modelToUse = options?.model?.key || selectedModel;
     const effortToUse = options?.effort || 'High';
+    let targetId = activeSessionId;
 
-    if (!targetId) {
-      const meta = JSON.stringify({
-        cwd: selectedFolder,
-        source: 'remoteai'
-      });
-      const { data: newSess } = await supabase
-        .from('sessions')
-        .insert({
-          title: promptText.slice(0, 30),
-          model: modelToUse,
-          effort: effortToUse,
-          status: 'idle',
-          system_prompt: meta,
-          ...(device?.id ? { device_id: device.id } : {})
-        })
-        .select()
-        .single();
-      if (!newSess) return;
-      targetId = newSess.id;
-      setSessions((prev) => [newSess, ...prev]);
-      setActiveSessionId(newSess.id);
+    // Check if targetId is valid in the sessions state
+    if (targetId && !sessions.some(s => s.id === targetId)) {
+      targetId = null;
     }
 
-    await supabase.from('messages').insert({
-      session_id: targetId,
-      role: 'user',
-      content: promptText.trim(),
-      model: modelToUse,
-      effort: effortToUse
-    });
+    try {
+      if (!targetId) {
+        const meta = JSON.stringify({
+          cwd: selectedFolder,
+          source: 'remoteai',
+          effort: effortToUse
+        });
+
+        const { data: newSess, error: createErr } = await supabase
+          .from('sessions')
+          .insert({
+            title: text.slice(0, 35),
+            model: modelToUse,
+            status: 'running',
+            system_prompt: meta,
+            ...(device?.id ? { device_id: device.id } : {})
+          })
+          .select()
+          .single();
+
+        if (createErr || !newSess) {
+          console.error('Failed to create session for prompt:', createErr);
+          return;
+        }
+
+        targetId = newSess.id;
+        setSessions((prev) => [newSess as Session, ...prev]);
+        setActiveSessionId(newSess.id);
+      } else {
+        // Update session status & metadata
+        const active = sessions.find((s) => s.id === targetId);
+        let existingMeta: any = {};
+        try {
+          existingMeta = JSON.parse(active?.system_prompt || '{}');
+        } catch {}
+
+        const updatedMeta = JSON.stringify({
+          ...existingMeta,
+          cwd: existingMeta.cwd || selectedFolder,
+          effort: effortToUse
+        });
+
+        await supabase
+          .from('sessions')
+          .update({
+            model: modelToUse,
+            status: 'running',
+            system_prompt: updatedMeta
+          })
+          .eq('id', targetId);
+
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === targetId
+              ? { ...s, model: modelToUse, status: 'running', system_prompt: updatedMeta }
+              : s
+          )
+        );
+      }
+
+      // Insert clean message (only valid schema columns)
+      const { error: msgErr } = await supabase.from('messages').insert({
+        session_id: targetId,
+        role: 'user',
+        content: text
+      });
+
+      if (msgErr) {
+        console.error('Failed to insert message:', msgErr.message);
+        await supabase.from('sessions').update({ status: 'idle' }).eq('id', targetId);
+      }
+    } catch (err: any) {
+      console.error('Unexpected error sending prompt:', err);
+      if (targetId) {
+        await supabase.from('sessions').update({ status: 'idle' }).eq('id', targetId);
+      }
+    }
   };
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
@@ -344,6 +397,7 @@ export default function DashboardPage() {
             sessionTitle={activeSession?.title}
             sessionFolder={selectedFolder}
             sessionModel={activeSession?.model}
+            onSendPrompt={(text) => handleSendPrompt(text)}
           />
 
           {/* PromptBar Footer */}

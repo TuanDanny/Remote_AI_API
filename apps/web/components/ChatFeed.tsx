@@ -7,7 +7,7 @@ import CallChip from './CallChip';
 import ThoughtLine from './ThoughtLine';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Terminal, ChevronDown } from 'lucide-react';
+import { Terminal, ChevronDown, Send, Sparkles, CornerDownLeft } from 'lucide-react';
 
 interface ChatFeedProps {
   messages: Message[];
@@ -15,7 +15,15 @@ interface ChatFeedProps {
   sessionTitle?: string;
   sessionFolder?: string;
   sessionModel?: string;
+  onSendPrompt?: (text: string) => void;
 }
+
+const QUICK_SUGGESTIONS = [
+  '📁 Liệt kê các file trong thư mục hiện tại',
+  '🔍 Kiểm tra git status & branch',
+  '⚙️ Chạy test kiểm thử tự động',
+  '📝 Tóm tắt tiến độ phiên làm việc này'
+];
 
 function ToolCallsCollapsible({ toolCalls }: { toolCalls: any[] }) {
   const [open, setOpen] = useState(false);
@@ -90,7 +98,8 @@ export function ChatFeed({
   sessionStatus,
   sessionTitle,
   sessionFolder,
-  sessionModel
+  sessionModel,
+  onSendPrompt
 }: ChatFeedProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -209,10 +218,49 @@ export function ChatFeed({
                     </ReactMarkdown>
                   </div>
                 )}
+
+                {/* Clickable Action button for suggestion / action messages */}
+                {!isUser && onSendPrompt && m.content && m.content.length < 150 && (m.content.startsWith('Để tôi') || m.content.startsWith('Tôi sẽ') || m.content.startsWith('Hãy') || m.content.startsWith('Bạn muốn')) && (
+                  <div className="mt-2.5 pt-2 border-t border-[#30363d]/40 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => onSendPrompt(m.content)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#21262d] hover:bg-[#30363d] text-[11px] text-[#58a6ff] hover:text-white border border-[#30363d] hover:border-[#58a6ff]/40 transition cursor-pointer active:scale-95 shadow-sm"
+                      title="Bấm để gửi yêu cầu này"
+                    >
+                      <CornerDownLeft className="h-3 w-3" />
+                      <span>Thực hiện ngay</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           );
         })
+      )}
+
+      {/* Quick Suggestions Row */}
+      {sessionStatus !== 'running' && onSendPrompt && (
+        <div className="pt-2 pb-1">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+            <span className="text-[11px] text-gray-500 flex items-center gap-1 flex-shrink-0">
+              <Sparkles className="h-3 w-3 text-amber-400" />
+              <span>Gợi ý:</span>
+            </span>
+            {QUICK_SUGGESTIONS.map((sug, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => onSendPrompt(sug)}
+                className="flex-shrink-0 text-xs text-gray-300 hover:text-white bg-[#161b22] hover:bg-[#21262d] border border-[#30363d] hover:border-[#58a6ff]/60 px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 shadow-sm active:scale-95 group"
+                title="Bấm để gửi yêu cầu này"
+              >
+                <span>{sug}</span>
+                <Send className="h-2.5 w-2.5 text-gray-500 group-hover:text-[#58a6ff] transition" />
+              </button>
+            ))}
+          </div>
+        </div>
       )}
 
       {sessionStatus === 'running' && (
