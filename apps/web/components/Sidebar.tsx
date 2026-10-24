@@ -46,6 +46,13 @@ export function parseSessionMeta(session: Session) {
   return { cwd: cwd || 'D:\\Project', source };
 }
 
+export function isSessionInFolder(sessionCwd: string, selectedFolder: string): boolean {
+  if (!sessionCwd || !selectedFolder) return false;
+  const normSess = sessionCwd.split('\\').join('/').replace(/\/+$/, '').toLowerCase();
+  const normTarget = selectedFolder.split('\\').join('/').replace(/\/+$/, '').toLowerCase();
+  return normSess === normTarget || normSess.startsWith(normTarget + '/');
+}
+
 export function Sidebar({
   device,
   sessions,
@@ -78,18 +85,14 @@ export function Sidebar({
 
     if (viewScope === 'current_folder') {
       const { cwd } = parseSessionMeta(s);
-      const normCur = displayFolder.replace(/\\/g, '/').toLowerCase();
-      const normSess = cwd.replace(/\\/g, '/').toLowerCase();
-      return normSess === normCur || normSess.includes(normCur) || normCur.includes(normSess);
+      return isSessionInFolder(cwd, displayFolder);
     }
     return true;
   });
 
   const currentFolderCount = sessions.filter(s => {
     const { cwd } = parseSessionMeta(s);
-    const normCur = displayFolder.replace(/\\/g, '/').toLowerCase();
-    const normSess = cwd.replace(/\\/g, '/').toLowerCase();
-    return normSess === normCur || normSess.includes(normCur) || normCur.includes(normSess);
+    return isSessionInFolder(cwd, displayFolder);
   }).length;
 
   return (

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { SupabaseClient } from '@supabase/supabase-js';
 
 export interface DiscoveredSession {
@@ -52,7 +53,7 @@ export class SessionDiscoveryService {
             if (targetFolder) {
               const normTarget = path.normalize(targetFolder).toLowerCase();
               const normSession = path.normalize(sessionData.cwd).toLowerCase();
-              if (normSession !== normTarget && !normSession.startsWith(normTarget)) {
+              if (normSession !== normTarget && !normSession.startsWith(normTarget + path.sep)) {
                 continue;
               }
             }
@@ -134,31 +135,65 @@ export class SessionDiscoveryService {
 
   async discoverCodexSessions(targetFolder?: string): Promise<DiscoveredSession[]> {
     const results: DiscoveredSession[] = [];
-    const indexPath = path.join(this.getHomeDir(), '.codex', 'session_index.jsonl');
+    const queryScriptPath = path.join(process.cwd(), 'src', 'query_codex.py');
+    const fallbackPath = path.join(__dirname, 'query_codex.py');
+    const scriptToRun = fs.existsSync(queryScriptPath) ? queryScriptPath : fallbackPath;
 
-    if (!fs.existsSync(indexPath)) return results;
-
-    try {
-      const fileStream = fs.createReadStream(indexPath);
-      const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-      for await (const line of rl) {
-        if (!line.trim()) continue;
-        try {
-          const obj = JSON.parse(line);
-          results.push({
-            id: obj.id,
-            title: `Codex: ${obj.thread_name || 'Thread'}`,
-            cwd: targetFolder || 'D:\\Project',
-            source: 'codex',
-            model: 'cx/gpt-6.1-sol',
-            updatedAt: obj.updated_at,
-            messages: []
-          });
-        } catch {}
+    if (fs.existsSync(scriptToRun)) {
+      try {
+        const proc = spawnSync('python', [scriptToRun], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+        if (proc.stdout) {
+          const list = JSON.parse(proc.stdout);
+          for (const item of list) {
+            const cwd = item.cwd || 'D:\\Project';
+            if (targetFolder) {
+              const normTarget = path.normalize(targetFolder).toLowerCase();
+              const normSession = path.normalize(cwd).toLowerCase();
+              if (normSession !== normTarget && !normSession.startsWith(normTarget + path.sep)) {
+                continue;
+              }
+            }
+            results.push({
+              id: item.id,
+              title: item.title ? `Codex: ${item.title}` : 'Codex Session',
+              cwd: cwd,
+              source: 'codex',
+              model: item.model || 'cx/gpt-6.1-sol',
+              messages: item.first_message ? [{ role: 'user', content: item.first_message }] : []
+            });
+          }
+          return results;
+        }
+      } catch (err: any) {
+        console.error('[SessionDiscovery] Python Codex query error:', err?.message || err);
       }
-    } catch (err: any) {
-      console.error('[SessionDiscovery] Error reading Codex sessions:', err?.message || err);
+    }
+
+    // Fallback if python script not available
+    const indexPath = path.join(this.getHomeDir(), '.codex', 'session_index.jsonl');
+    if (fs.existsSync(indexPath)) {
+      try {
+        const fileStream = fs.createReadStream(indexPath);
+        const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+        for await (const line of rl) {
+          if (!line.trim()) continue;
+          try {
+            const obj = JSON.parse(line);
+            results.push({
+              id: obj.id,
+              title: `Codex: ${obj.thread_name || 'Thread'}`,
+              cwd: targetFolder || 'D:\\Project',
+              source: 'codex',
+              model: 'cx/gpt-6.1-sol',
+              updatedAt: obj.updated_at,
+              messages: []
+            });
+          } catch {}
+        }
+      } catch (err: any) {
+        console.error('[SessionDiscovery] Fallback index reading error:', err?.message || err);
+      }
     }
 
     return results;
@@ -172,31 +207,39 @@ export class SessionDiscoveryService {
     let syncedCount = 0;
 
     for (const ds of allDiscovered) {
-      // Check if session already exists by title and device
-      const { data: existing } = await this.supabase
-        .from('sessions')
-        .select('id')
-        .eq('device_id', this.deviceId)
-        .eq('title', ds.title)
-        .maybeSingle();
-
-      if (existing) {
-        continue;
-      }
-
-      // Insert new session with cwd in system_prompt metadata
       const meta = JSON.stringify({
         cwd: ds.cwd,
         source: ds.source,
         isExternal: true
       });
 
+      // Check if session already exists by title and device
+      const { data: existing } = await this.supabase
+        .from('sessions')
+        .select('id, system_prompt')
+        .eq('device_id', this.deviceId)
+        .eq('title', ds.title)
+        .maybeSingle();
+
+      if (existing) {
+        // Update cwd if different
+        await this.supabase
+          .from('sessions')
+          .update({
+            system_prompt: meta,
+            model: ds.model || 'cx/gpt-6.1-sol'
+          })
+          .eq('id', existing.id);
+        continue;
+      }
+
+      // Insert new session with cwd in system_prompt metadata
       const { data: newSession, error: sErr } = await this.supabase
         .from('sessions')
         .insert({
           device_id: this.deviceId,
           title: ds.title,
-          model: ds.model || 'ag/claude-opus-4-6-thinking',
+          model: ds.model || 'cx/gpt-6.1-sol',
           system_prompt: meta,
           status: 'idle'
         })
@@ -222,7 +265,7 @@ export class SessionDiscoveryService {
       syncedCount++;
     }
 
-    console.log(`[SessionDiscovery] Synced ${syncedCount} new external sessions to Supabase.`);
+    console.log(`[SessionDiscovery] Synced / refreshed external sessions in Supabase.`);
     return syncedCount;
   }
 }

@@ -6,6 +6,7 @@ import { DiffCard } from './DiffCard';
 import CallChip from './CallChip';
 import ThoughtLine from './ThoughtLine';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface ChatFeedProps {
   messages: Message[];
@@ -35,6 +36,13 @@ export function ChatFeed({
       .map(line => line.trim().replace(/^[-*•#\d.]+\s*/, ''))
       .filter(line => line.length > 5)
       .slice(0, 5);
+  };
+
+  const formatMarkdownContent = (text: string): string => {
+    if (!text) return '';
+    let formatted = text.replace(/\|\s*\|(?=[-\w\s])/g, '|\n|');
+    formatted = formatted.replace(/([^\n])\n(\|.+?\|\n\|[-:\s|]+?\|)/g, '$1\n\n$2');
+    return formatted;
   };
 
   return (
@@ -143,10 +151,27 @@ export function ChatFeed({
                   </div>
                 )}
 
-                {/* Main Content */}
+                {/* Main Content with GFM & Table support */}
                 {m.content && (
                   <div className="prose prose-invert prose-xs max-w-none">
-                    <ReactMarkdown>{m.content}</ReactMarkdown>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        table: ({ node, ...props }) => (
+                          <div className="overflow-x-auto my-3 rounded-xl border border-[#30363d] bg-[#0d1117]/80">
+                            <table className="w-full text-left text-xs border-collapse" {...props} />
+                          </div>
+                        ),
+                        th: ({ node, ...props }) => (
+                          <th className="bg-[#1c2128] text-white font-semibold p-2.5 border-b border-[#30363d]" {...props} />
+                        ),
+                        td: ({ node, ...props }) => (
+                          <td className="p-2.5 border-b border-[#30363d]/50 text-gray-300" {...props} />
+                        )
+                      }}
+                    >
+                      {formatMarkdownContent(m.content)}
+                    </ReactMarkdown>
                   </div>
                 )}
               </div>

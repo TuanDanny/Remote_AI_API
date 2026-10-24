@@ -7,3 +7,131 @@ body {
   color: #c9d1d9;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
+
+/* Enhanced Markdown & Table Styling */
+.prose {
+  color: #c9d1d9;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.prose p {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+  white-space: pre-wrap;
+}
+
+.prose h1, .prose h2, .prose h3, .prose h4 {
+  color: #ffffff;
+  font-weight: 600;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+
+.prose h1 { font-size: 1.35em; border-bottom: 1px solid #30363d; padding-bottom: 0.3em; }
+.prose h2 { font-size: 1.2em; border-bottom: 1px solid #30363d; padding-bottom: 0.25em; }
+.prose h3 { font-size: 1.1em; }
+
+.prose ul {
+  list-style-type: disc;
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+
+.prose ol {
+  list-style-type: decimal;
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+
+.prose li {
+  margin: 0.25em 0;
+}
+
+.prose blockquote {
+  border-left: 3px solid #58a6ff;
+  padding-left: 1em;
+  color: #8b949e;
+  margin: 0.75em 0;
+  font-style: italic;
+}
+
+.prose code {
+  background-color: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 0.15em 0.4em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
+  color: #58a6ff;
+}
+
+.prose pre {
+  background-color: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 0.75em 0;
+}
+
+.prose pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: #c9d1d9;
+}
+
+/* Markdown Tables (GFM) */
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 12px;
+  display: table;
+  overflow-x: auto;
+}
+
+.prose th,
+.prose td {
+  border: 1px solid #30363d;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.prose th {
+  background-color: #161b22;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.prose tr:nth-child(even) {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.prose tr:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+@layer base {
+  :root {
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+  .dark {
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
