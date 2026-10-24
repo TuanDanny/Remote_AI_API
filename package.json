@@ -1,0 +1,15 @@
+{
+  "name": "remote-ai",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "daemon"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev:daemon": "npm run dev --workspace=daemon",
+    "build:web": "npm run build --workspace=apps/web",
+    "build:daemon": "npm run build --workspace=daemon"
+  }
+}
