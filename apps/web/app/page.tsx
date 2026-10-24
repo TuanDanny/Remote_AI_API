@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { Device, Session, Message } from '../../../types';
-import { Sidebar } from '../components/Sidebar';
+import { Sidebar, parseSessionMeta } from '../components/Sidebar';
 import { ChatFeed } from '../components/ChatFeed';
 import { PasscodeGate } from '../components/PasscodeGate';
 import PromptBar from '../components/PromptBar';
@@ -215,6 +215,10 @@ export default function DashboardPage() {
     return Math.min(100, Math.max(1, Math.round((approxTokens / 200000) * 100)));
   }, [messages]);
 
+  const activeFolder = activeSession
+    ? parseSessionMeta(activeSession).cwd
+    : device?.working_directory || 'D:\\Project';
+
   return (
     <PasscodeGate>
       <div className="flex h-screen w-full bg-[#0d1117] overflow-hidden">
@@ -222,7 +226,7 @@ export default function DashboardPage() {
           device={device}
           sessions={sessions}
           activeSessionId={activeSessionId}
-          currentFolder={activeSession?.working_directory || device?.working_directory}
+          currentFolder={activeFolder}
           onSelectSession={setActiveSessionId}
           onCreateSession={handleCreateSession}
           onDeleteSession={handleDeleteSession}
@@ -282,7 +286,13 @@ export default function DashboardPage() {
           </header>
 
           {/* Chat Feed */}
-          <ChatFeed messages={messages} sessionStatus={activeSession?.status || 'idle'} />
+          <ChatFeed
+            messages={messages}
+            sessionStatus={activeSession?.status || 'idle'}
+            sessionTitle={activeSession?.title}
+            sessionFolder={activeFolder}
+            sessionModel={activeSession?.model}
+          />
 
           {/* PromptBar Footer */}
           <footer className="p-4 border-t border-[#30363d] bg-[#161b22] flex justify-center">

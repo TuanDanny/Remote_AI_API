@@ -10,9 +10,18 @@ import ReactMarkdown from 'react-markdown';
 interface ChatFeedProps {
   messages: Message[];
   sessionStatus: string;
+  sessionTitle?: string;
+  sessionFolder?: string;
+  sessionModel?: string;
 }
 
-export function ChatFeed({ messages, sessionStatus }: ChatFeedProps) {
+export function ChatFeed({
+  messages,
+  sessionStatus,
+  sessionTitle,
+  sessionFolder,
+  sessionModel
+}: ChatFeedProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -30,6 +39,27 @@ export function ChatFeed({ messages, sessionStatus }: ChatFeedProps) {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4 max-w-4xl mx-auto w-full">
+      {/* Session Resume / Context Header Banner */}
+      {sessionTitle && (
+        <div className="p-3 bg-[#161b22] border border-[#30363d] rounded-2xl flex items-center justify-between text-xs shadow-sm mb-2">
+          <div className="flex items-center gap-2.5 truncate flex-1 pr-2">
+            <div className="h-8 w-8 rounded-xl bg-[#58a6ff]/15 flex items-center justify-center text-sm flex-shrink-0 text-[#58a6ff]">
+              🚀
+            </div>
+            <div className="truncate">
+              <div className="font-semibold text-white text-xs truncate">{sessionTitle}</div>
+              <div className="text-[11px] text-gray-400 font-mono truncate mt-0.5">
+                📁 {sessionFolder || 'D:\\Project'} • 🤖 {sessionModel?.split('/').pop() || 'AI Model'}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 flex-shrink-0 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-medium">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span>Tiếp tục phiên này</span>
+          </div>
+        </div>
+      )}
+
       {messages.length === 0 ? (
         <div className="h-full flex flex-col items-center justify-center text-center text-gray-500 py-20">
           <p className="text-base font-medium text-gray-300">Phiên làm việc mới</p>

@@ -5,6 +5,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { LocalTools } from './tools.js';
 import { AgentRunner } from './agent.js';
 import { HeartbeatService } from './heartbeat.js';
+import { SessionDiscoveryService } from './sessionDiscovery.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_KEY || '';
@@ -119,8 +120,14 @@ export function createCoordinator(options?: {
     const activeModel = messageRow.model || session?.model || defaultModel;
     const activeEffort = messageRow.effort || session?.effort;
 
-    // Determine working directory priority: session.working_directory -> device.working_directory -> workspaceRoot
+    // Determine working directory priority: session.system_prompt (cwd) -> session.working_directory -> device.working_directory -> workspaceRoot
     let activeWorkspace = session?.working_directory;
+    if (!activeWorkspace && session?.system_prompt) {
+      try {
+        const meta = JSON.parse(session.system_prompt);
+        if (meta.cwd) activeWorkspace = meta.cwd;
+      } catch {}
+    }
     if (!activeWorkspace) {
       const { data: dev } = await supabase
         .from('devices')
@@ -189,11 +196,14 @@ export function createCoordinator(options?: {
     }
   }
 
+  const discovery = new SessionDiscoveryService(supabase, deviceId);
+
   return {
     supabase,
     tools,
     agent,
     heartbeat,
+    discovery,
     handleNewUserMessage
   };
 }
@@ -210,10 +220,18 @@ export async function main() {
     process.exit(1);
   }
 
-  const { supabase, heartbeat, handleNewUserMessage } = coordinator;
+  const { supabase, heartbeat, discovery, handleNewUserMessage } = coordinator;
 
   await heartbeat.start();
   console.log('🟢 Heartbeat service active (Online).');
+
+  // Discover and sync local Claude Code and Codex sessions
+  try {
+    console.log('🔍 Discovering existing local Claude & Codex sessions...');
+    await discovery.syncDiscoveredSessionsToSupabase();
+  } catch (err: any) {
+    console.error('[SessionDiscovery] Sync error:', err?.message || err);
+  }
 
   // Subscribe to device updates so heartbeat stays in sync with changes from Web UI
   const deviceChannel = supabase
@@ -226,6 +244,7 @@ export async function main() {
         if (updated?.working_directory) {
           heartbeat.setWorkingDirectory(updated.working_directory);
           console.log(`[Heartbeat] Working directory updated to: ${updated.working_directory}`);
+          discovery.syncDiscoveredSessionsToSupabase(updated.working_directory).catch(() => {});
         }
       }
     )
