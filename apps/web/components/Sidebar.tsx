@@ -1,7 +1,7 @@
 'use client';
 import React, { useState } from 'react';
 import { Session, Device } from '../../../types';
-import { Plus, Terminal, Laptop, Trash2, Folder, Check, Edit2, Search, Play, History } from 'lucide-react';
+import { Plus, Terminal, Laptop, Trash2, Folder, Check, Edit2, Search, Play, History, PanelLeftClose } from 'lucide-react';
 
 interface SidebarProps {
   device: Device | null;
@@ -12,6 +12,7 @@ interface SidebarProps {
   onCreateSession: () => void;
   onDeleteSession: (id: string) => void;
   onUpdateFolder?: (newFolder: string) => void;
+  onCloseSidebar?: () => void;
 }
 
 const COMMON_FOLDERS = [
@@ -61,7 +62,8 @@ export function Sidebar({
   onSelectSession,
   onCreateSession,
   onDeleteSession,
-  onUpdateFolder
+  onUpdateFolder,
+  onCloseSidebar
 }: SidebarProps) {
   const isOnline = device?.status === 'online';
   const [editingFolder, setEditingFolder] = useState(false);
@@ -109,9 +111,21 @@ export function Sidebar({
           <Terminal className="h-5 w-5 text-[#58a6ff]" />
           <span className="font-bold text-base text-white tracking-tight">RemoteAI</span>
         </div>
-        <div className="flex items-center gap-1.5 text-xs">
-          <span className={`h-2.5 w-2.5 rounded-full ${isOnline ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-          <span className="text-gray-400 font-medium">{isOnline ? 'PC Online' : 'PC Offline'}</span>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 text-xs">
+            <span className={`h-2.5 w-2.5 rounded-full ${isOnline ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+            <span className="text-gray-400 font-medium">{isOnline ? 'PC Online' : 'PC Offline'}</span>
+          </div>
+          {onCloseSidebar && (
+            <button
+              type="button"
+              onClick={onCloseSidebar}
+              className="p-1 rounded-md text-gray-400 hover:text-white hover:bg-[#21262d] transition"
+              title="Thu gọn Sidebar"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
 

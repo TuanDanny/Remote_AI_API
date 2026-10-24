@@ -72,9 +72,10 @@ export class SessionDiscoveryService {
     const fileStream = fs.createReadStream(filePath);
     const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
 
-    const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string; tool_calls?: any[] }> = [];
+    const rawMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string; tool_calls?: any[] }> = [];
     let detectedCwd = '';
     let firstUserPrompt = '';
+    let currentAssistant: { role: 'assistant'; content: string; tool_calls: any[] } | null = null;
 
     for await (const line of rl) {
       if (!line.trim()) continue;
@@ -85,6 +86,10 @@ export class SessionDiscoveryService {
         }
 
         if (obj.type === 'user' && obj.message?.content) {
+          if (currentAssistant) {
+            rawMessages.push(currentAssistant);
+            currentAssistant = null;
+          }
           let text = '';
           if (typeof obj.message.content === 'string') {
             text = obj.message.content;
@@ -96,27 +101,45 @@ export class SessionDiscoveryService {
             if (!firstUserPrompt) {
               firstUserPrompt = cleanText.slice(0, 50).trim();
             }
-            messages.push({ role: 'user', content: cleanText });
+            rawMessages.push({ role: 'user', content: cleanText });
           }
         } else if (obj.type === 'assistant' && obj.message?.content) {
-          let text = '';
-          const toolCalls: any[] = [];
+          if (!currentAssistant) {
+            currentAssistant = { role: 'assistant', content: '', tool_calls: [] };
+          }
           if (Array.isArray(obj.message.content)) {
             for (const item of obj.message.content) {
-              if (item.type === 'text') text += item.text;
+              if (item.type === 'text') currentAssistant.content += item.text;
               if (item.type === 'tool_use') {
-                toolCalls.push({ name: item.name, args: item.input });
+                currentAssistant.tool_calls.push({ name: item.name, args: item.input });
               }
             }
           } else if (typeof obj.message.content === 'string') {
-            text = obj.message.content;
-          }
-          if (text || toolCalls.length > 0) {
-            messages.push({ role: 'assistant', content: text, tool_calls: toolCalls });
+            currentAssistant.content += obj.message.content;
           }
         }
       } catch {
         // ignore malformed json line
+      }
+    }
+
+    if (currentAssistant) {
+      rawMessages.push(currentAssistant);
+    }
+
+    // Merge consecutive assistant messages so tools and texts in a turn stay together
+    const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string; tool_calls?: any[] }> = [];
+    for (const m of rawMessages) {
+      const prev = messages[messages.length - 1];
+      if (prev && prev.role === 'assistant' && m.role === 'assistant') {
+        if (m.content) {
+          prev.content += (prev.content ? '\n\n' : '') + m.content;
+        }
+        if (m.tool_calls && m.tool_calls.length > 0) {
+          prev.tool_calls = [...(prev.tool_calls || []), ...m.tool_calls];
+        }
+      } else {
+        messages.push({ ...m, tool_calls: [...(m.tool_calls || [])] });
       }
     }
 
@@ -137,7 +160,12 @@ export class SessionDiscoveryService {
     const results: DiscoveredSession[] = [];
     const queryScriptPath = path.join(process.cwd(), 'src', 'query_codex.py');
     const fallbackPath = path.join(__dirname, 'query_codex.py');
-    const scriptToRun = fs.existsSync(queryScriptPath) ? queryScriptPath : fallbackPath;
+    const rootPath = path.join(process.cwd(), 'daemon', 'src', 'query_codex.py');
+    const scriptToRun = fs.existsSync(queryScriptPath)
+      ? queryScriptPath
+      : fs.existsSync(rootPath)
+      ? rootPath
+      : fallbackPath;
 
     if (fs.existsSync(scriptToRun)) {
       try {
@@ -222,7 +250,7 @@ export class SessionDiscoveryService {
         .maybeSingle();
 
       if (existing) {
-        // Update cwd if different
+        // Update cwd and clean up messages if it was previously filled with fragmented tool calls
         await this.supabase
           .from('sessions')
           .update({
@@ -230,6 +258,27 @@ export class SessionDiscoveryService {
             model: ds.model || 'cx/gpt-6.1-sol'
           })
           .eq('id', existing.id);
+
+        if (ds.messages.length > 0) {
+          const { count } = await this.supabase
+            .from('messages')
+            .select('*', { count: 'exact', head: true })
+            .eq('session_id', existing.id);
+
+          // If messages were fragmented or need refresh
+          if (!count || count < 5 || count > 30) {
+            await this.supabase.from('messages').delete().eq('session_id', existing.id);
+            const recentMessages = ds.messages.slice(-16);
+            for (const m of recentMessages) {
+              await this.supabase.from('messages').insert({
+                session_id: existing.id,
+                role: m.role,
+                content: m.content || '',
+                tool_calls: m.tool_calls || []
+              });
+            }
+          }
+        }
         continue;
       }
 
@@ -251,8 +300,8 @@ export class SessionDiscoveryService {
         continue;
       }
 
-      // Sync recent messages (take last 20 for quick responsive loading)
-      const recentMessages = ds.messages.slice(-20);
+      // Sync recent messages (take last 16 merged turns for responsive loading)
+      const recentMessages = ds.messages.slice(-16);
       for (const m of recentMessages) {
         await this.supabase.from('messages').insert({
           session_id: newSession.id,

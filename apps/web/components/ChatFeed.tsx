@@ -1,5 +1,5 @@
 'use client';
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { Message } from '../../../types';
 import { TerminalCard } from './TerminalCard';
 import { DiffCard } from './DiffCard';
@@ -7,6 +7,7 @@ import CallChip from './CallChip';
 import ThoughtLine from './ThoughtLine';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { Terminal, ChevronDown } from 'lucide-react';
 
 interface ChatFeedProps {
   messages: Message[];
@@ -14,6 +15,74 @@ interface ChatFeedProps {
   sessionTitle?: string;
   sessionFolder?: string;
   sessionModel?: string;
+}
+
+function ToolCallsCollapsible({ toolCalls }: { toolCalls: any[] }) {
+  const [open, setOpen] = useState(false);
+  if (!toolCalls || toolCalls.length === 0) return null;
+
+  const names = Array.from(new Set(toolCalls.map(t => t.name))).join(', ');
+
+  return (
+    <div className="mb-2">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#0d1117] hover:bg-[#21262d] border border-[#30363d] text-[11px] text-gray-400 hover:text-gray-200 transition cursor-pointer select-none"
+      >
+        <Terminal className="h-3 w-3 text-[#58a6ff]" />
+        <span>Đã dùng {toolCalls.length} công cụ ({names})</span>
+        <ChevronDown className={`h-3 w-3 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-2 p-2.5 rounded-xl bg-[#0d1117]/90 border border-[#30363d]">
+          <div className="flex flex-wrap gap-2">
+            {toolCalls.map((tc, idx) => {
+              const iconType =
+                tc.name === 'execute_command'
+                  ? 'terminal'
+                  : tc.name === 'search_code'
+                  ? 'search'
+                  : tc.name === 'edit_file'
+                  ? 'edit'
+                  : 'file';
+
+              const chipStatus =
+                tc.status === 'completed'
+                  ? 'done'
+                  : tc.status === 'failed' || tc.status === 'rejected'
+                  ? 'error'
+                  : 'running';
+
+              const argDisplay = tc.command || tc.args?.path || tc.args?.command || tc.name;
+
+              return (
+                <CallChip
+                  key={idx}
+                  name={tc.name}
+                  icon={iconType}
+                  argument={argDisplay}
+                  status={chipStatus}
+                  surfaceColor="#161b22"
+                  color="#c9d1d9"
+                />
+              );
+            })}
+          </div>
+
+          {toolCalls.map((tc, idx) => (
+            <React.Fragment key={`detail-${idx}`}>
+              {tc.name === 'execute_command' && (
+                <TerminalCard command={tc.command || tc.args?.command} output={tc.result} status={tc.status} />
+              )}
+              {tc.diff && <DiffCard diffText={tc.diff} filePath={tc.args?.path} />}
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ChatFeed({
@@ -40,6 +109,7 @@ export function ChatFeed({
 
   const formatMarkdownContent = (text: string): string => {
     if (!text) return '';
+    // Fix collapsed markdown table rows where pipes were collapsed onto single lines
     let formatted = text.replace(/\|\s*\|(?=[-\w\s])/g, '|\n|');
     formatted = formatted.replace(/([^\n])\n(\|.+?\|\n\|[-:\s|]+?\|)/g, '$1\n\n$2');
     return formatted;
@@ -78,12 +148,21 @@ export function ChatFeed({
           const isUser = m.role === 'user';
           const steps = parseReasoningSteps(m.reasoning);
 
+          // If assistant message has NO content but has tool calls, render as clean inline trace
+          if (!isUser && !m.content?.trim() && m.tool_calls && m.tool_calls.length > 0) {
+            return (
+              <div key={m.id} className="flex justify-start my-1 pl-2">
+                <ToolCallsCollapsible toolCalls={m.tool_calls} />
+              </div>
+            );
+          }
+
           return (
             <div key={m.id} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
               <div
-                className={`max-w-[85%] rounded-2xl px-4 py-3 text-xs leading-relaxed ${
+                className={`max-w-[88%] rounded-2xl px-4 py-3 text-xs leading-relaxed ${
                   isUser
-                    ? 'bg-[#1f6feb] text-white rounded-br-none'
+                    ? 'bg-[#1f6feb] text-white rounded-br-none shadow-sm'
                     : 'bg-[#161b22] border border-[#30363d] text-gray-200 rounded-bl-none shadow-sm'
                 }`}
               >
@@ -102,53 +181,9 @@ export function ChatFeed({
                   </div>
                 )}
 
-                {/* Tool calls as CallChips */}
+                {/* Collapsible Tool Calls above content */}
                 {m.tool_calls && m.tool_calls.length > 0 && (
-                  <div className="mb-3 space-y-2">
-                    <div className="flex flex-wrap gap-2">
-                      {m.tool_calls.map((tc, idx) => {
-                        const iconType =
-                          tc.name === 'execute_command'
-                            ? 'terminal'
-                            : tc.name === 'search_code'
-                            ? 'search'
-                            : tc.name === 'edit_file'
-                            ? 'edit'
-                            : 'file';
-
-                        const chipStatus =
-                          tc.status === 'completed'
-                            ? 'done'
-                            : tc.status === 'failed' || tc.status === 'rejected'
-                            ? 'error'
-                            : 'running';
-
-                        const argDisplay = tc.command || tc.args?.path || tc.args?.command || tc.name;
-
-                        return (
-                          <CallChip
-                            key={idx}
-                            name={tc.name}
-                            icon={iconType}
-                            argument={argDisplay}
-                            status={chipStatus}
-                            surfaceColor="#0d1117"
-                            color="#c9d1d9"
-                          />
-                        );
-                      })}
-                    </div>
-
-                    {/* Detailed cards if command or diff exists */}
-                    {m.tool_calls.map((tc, idx) => (
-                      <React.Fragment key={`detail-${idx}`}>
-                        {tc.name === 'execute_command' && (
-                          <TerminalCard command={tc.command || tc.args?.command} output={tc.result} status={tc.status} />
-                        )}
-                        {tc.diff && <DiffCard diffText={tc.diff} filePath={tc.args?.path} />}
-                      </React.Fragment>
-                    ))}
-                  </div>
+                  <ToolCallsCollapsible toolCalls={m.tool_calls} />
                 )}
 
                 {/* Main Content with GFM & Table support */}

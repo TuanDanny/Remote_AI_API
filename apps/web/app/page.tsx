@@ -8,7 +8,7 @@ import { PasscodeGate } from '../components/PasscodeGate';
 import PromptBar from '../components/PromptBar';
 import SpecularButton from '../components/SpecularButton';
 import CometDial from '../components/CometDial';
-import { Play } from 'lucide-react';
+import { Play, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 
 const MODEL_OPTIONS = [
   { key: 'cx/gpt-6.1-sol', name: 'GPT-6.1 Sol', tag: 'Reasoning (Light-Max)' },
@@ -26,6 +26,7 @@ export default function DashboardPage() {
   const [selectedModel, setSelectedModel] = useState('cx/gpt-6.1-sol');
   const [selectedFolder, setSelectedFolder] = useState<string>('D:\\Project');
   const [showDial, setShowDial] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // Load initial data
   useEffect(() => {
@@ -253,22 +254,42 @@ export default function DashboardPage() {
   return (
     <PasscodeGate>
       <div className="flex h-screen w-full bg-[#0d1117] overflow-hidden">
-        <Sidebar
-          device={device}
-          sessions={sessions}
-          activeSessionId={activeSessionId}
-          currentFolder={selectedFolder}
-          onSelectSession={handleSelectSession}
-          onCreateSession={handleCreateSession}
-          onDeleteSession={handleDeleteSession}
-          onUpdateFolder={handleUpdateFolder}
-        />
+        {/* Collapsible Sidebar Container */}
+        <div
+          className={`transition-all duration-300 ease-in-out overflow-hidden flex-shrink-0 ${
+            sidebarOpen ? 'w-80' : 'w-0'
+          }`}
+        >
+          <Sidebar
+            device={device}
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            currentFolder={selectedFolder}
+            onSelectSession={handleSelectSession}
+            onCreateSession={handleCreateSession}
+            onDeleteSession={handleDeleteSession}
+            onUpdateFolder={handleUpdateFolder}
+            onCloseSidebar={() => setSidebarOpen(false)}
+          />
+        </div>
 
-        <main className="flex-1 flex flex-col h-screen">
+        <main className="flex-1 flex flex-col h-screen min-w-0">
           {/* Header */}
-          <header className="h-14 border-b border-[#30363d] bg-[#161b22] px-6 flex items-center justify-between">
-            <div className="font-semibold text-sm text-white truncate max-w-sm">
-              {activeSession?.title || 'Chọn một phiên làm việc'}
+          <header className="h-14 border-b border-[#30363d] bg-[#161b22] px-4 flex items-center justify-between">
+            <div className="flex items-center gap-3 truncate max-w-lg">
+              {/* Toggle Sidebar Button */}
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-[#21262d] border border-[#30363d] transition flex-shrink-0"
+                title={sidebarOpen ? "Thu gọn thanh bên" : "Mở rộng thanh bên"}
+              >
+                {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4 text-[#58a6ff]" />}
+              </button>
+
+              <div className="font-semibold text-sm text-white truncate">
+                {activeSession?.title || 'Chọn một phiên làm việc'}
+              </div>
             </div>
 
             <div className="flex items-center gap-4">
