@@ -39,6 +39,7 @@ export interface Message {
   session_id: string;
   role: MessageRole;
   content: string;
+  reasoning?: string;
   tool_calls?: ToolCall[];
   created_at: string;
 }

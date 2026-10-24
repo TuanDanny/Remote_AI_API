@@ -120,8 +120,9 @@ export class AgentRunner {
     messages: any[],
     onStream: (chunk: string) => void | Promise<void>,
     onToolExecute: (toolCall: ToolCall) => Promise<boolean>,
-    modelOverride?: string
-  ): Promise<{ responseText: string; toolCalls: ToolCall[] }> {
+    modelOverride?: string,
+    onReasoning?: (chunk: string) => void | Promise<void>
+  ): Promise<{ responseText: string; toolCalls: ToolCall[]; reasoning: string; rawToolCalls: any[] }> {
     const url = `${this.routerBaseUrl}/chat/completions`;
 
     const res = await fetch(url, {
@@ -145,6 +146,7 @@ export class AgentRunner {
 
     const isStream = res.headers.get('content-type')?.includes('text/event-stream');
     let content = '';
+    let reasoning = '';
     const rawToolCalls: Array<{ id: string; function?: { name?: string; arguments?: string } }> = [];
 
     if (isStream) {
@@ -172,6 +174,11 @@ export class AgentRunner {
                 if (delta?.content) {
                   content += delta.content;
                   await Promise.resolve(onStream(delta.content));
+                }
+                const rChunk = delta?.reasoning_content || delta?.reasoning;
+                if (rChunk) {
+                  reasoning += rChunk;
+                  if (onReasoning) await Promise.resolve(onReasoning(rChunk));
                 }
                 if (delta?.tool_calls) {
                   for (const tc of delta.tool_calls) {
@@ -205,6 +212,10 @@ export class AgentRunner {
       const choice = data.choices?.[0];
       const message = choice?.message || {};
       content = message.content || '';
+      reasoning = message.reasoning_content || message.reasoning || '';
+      if (reasoning && onReasoning) {
+        await Promise.resolve(onReasoning(reasoning));
+      }
       if (Array.isArray(message.tool_calls)) {
         rawToolCalls.push(...message.tool_calls);
       }
@@ -279,7 +290,66 @@ export class AgentRunner {
       toolCalls.push(toolCall);
     }
 
-    return { responseText: content, toolCalls };
+    return { responseText: content, toolCalls, reasoning, rawToolCalls };
+  }
+
+  async runLoop(
+    conversationHistory: any[],
+    onStream: (chunk: string) => void | Promise<void>,
+    onReasoning: (chunk: string) => void | Promise<void>,
+    onToolExecute: (toolCall: ToolCall) => Promise<boolean>,
+    modelOverride?: string,
+    maxTurns: number = 5
+  ): Promise<{ responseText: string; toolCalls: ToolCall[]; reasoning: string }> {
+    const history = [...conversationHistory];
+    const allToolCalls: ToolCall[] = [];
+    let fullResponseText = '';
+    let fullReasoning = '';
+
+    for (let turn = 0; turn < maxTurns; turn++) {
+      const step = await this.runStep(
+        history,
+        onStream,
+        onToolExecute,
+        modelOverride,
+        onReasoning
+      );
+
+      if (step.reasoning) {
+        fullReasoning += (fullReasoning ? '\n\n' : '') + step.reasoning;
+      }
+      if (step.responseText) {
+        fullResponseText += (fullResponseText ? '\n\n' : '') + step.responseText;
+      }
+
+      if (step.toolCalls.length === 0) {
+        break;
+      }
+
+      allToolCalls.push(...step.toolCalls);
+
+      // Add assistant response to history
+      history.push({
+        role: 'assistant',
+        content: step.responseText || null,
+        tool_calls: step.rawToolCalls
+      });
+
+      // Add tool results to history
+      for (const tc of step.toolCalls) {
+        history.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          content: tc.result || 'Done'
+        });
+      }
+    }
+
+    return {
+      responseText: fullResponseText,
+      toolCalls: allToolCalls,
+      reasoning: fullReasoning
+    };
   }
 
   async processMessage(
@@ -288,10 +358,11 @@ export class AgentRunner {
     onStream: (chunk: string) => void | Promise<void>,
     onToolExecute?: (toolCall: ToolCall) => Promise<boolean>,
     modelOverride?: string
-  ): Promise<{ responseText: string; toolCalls: ToolCall[] }> {
-    return this.runStep(
+  ): Promise<{ responseText: string; toolCalls: ToolCall[]; reasoning: string }> {
+    return this.runLoop(
       [{ role: 'user', content: userPrompt }],
       onStream,
+      async () => {},
       onToolExecute || (async () => true),
       modelOverride
     );

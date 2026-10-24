@@ -1,19 +1,31 @@
 'use client';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { Device, Session, Message } from '../../../types';
 import { Sidebar } from '../components/Sidebar';
 import { ChatFeed } from '../components/ChatFeed';
 import { PasscodeGate } from '../components/PasscodeGate';
-import { Send } from 'lucide-react';
+import PromptBar from '../components/PromptBar';
+import SpecularButton from '../components/SpecularButton';
+import CometDial from '../components/CometDial';
+import { Play } from 'lucide-react';
+
+const MODEL_OPTIONS = [
+  { key: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', tag: 'Fast & Smart' },
+  { key: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', tag: 'Instant' },
+  { key: 'claude-claude_anti', name: 'Claude Anti', tag: 'Special' },
+  { key: 'modelapi/gpt-6-sol', name: 'GPT-6 Sol', tag: 'Powerful' },
+  { key: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', tag: 'Standard' },
+  { key: 'openai/gpt-4o', name: 'GPT-4o', tag: 'OpenAI' }
+];
 
 export default function DashboardPage() {
   const [device, setDevice] = useState<Device | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [prompt, setPrompt] = useState('');
   const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-5');
+  const [showDial, setShowDial] = useState(false);
 
   // Load initial data
   useEffect(() => {
@@ -145,21 +157,43 @@ export default function DashboardPage() {
     }
   };
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!prompt.trim() || !activeSessionId) return;
+  const handleSendPrompt = async (promptText: string) => {
+    if (!promptText.trim()) return;
 
-    const userText = prompt.trim();
-    setPrompt('');
+    let targetId = activeSessionId;
+    if (!targetId) {
+      // Create session first if none active
+      const { data: newSess } = await supabase
+        .from('sessions')
+        .insert({
+          title: promptText.slice(0, 30),
+          model: selectedModel,
+          status: 'idle',
+          ...(device?.id ? { device_id: device.id } : {})
+        })
+        .select()
+        .single();
+      if (!newSess) return;
+      targetId = newSess.id;
+      setSessions((prev) => [newSess, ...prev]);
+      setActiveSessionId(newSess.id);
+    }
 
     await supabase.from('messages').insert({
-      session_id: activeSessionId,
+      session_id: targetId,
       role: 'user',
-      content: userText
+      content: promptText.trim()
     });
   };
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+
+  // Approximate context window token usage %
+  const contextPct = useMemo(() => {
+    const totalChars = messages.reduce((acc, m) => acc + (m.content?.length || 0) + (m.reasoning?.length || 0), 0);
+    const approxTokens = Math.round(totalChars / 3.8);
+    return Math.min(100, Math.max(1, Math.round((approxTokens / 200000) * 100)));
+  }, [messages]);
 
   return (
     <PasscodeGate>
@@ -176,44 +210,82 @@ export default function DashboardPage() {
         <main className="flex-1 flex flex-col h-screen">
           {/* Header */}
           <header className="h-14 border-b border-[#30363d] bg-[#161b22] px-6 flex items-center justify-between">
-            <div className="font-semibold text-sm text-white truncate">
+            <div className="font-semibold text-sm text-white truncate max-w-sm">
               {activeSession?.title || 'Chọn một phiên làm việc'}
             </div>
-            <select
-              value={selectedModel}
-              onChange={(e) => handleModelChange(e.target.value)}
-              className="bg-[#0d1117] border border-[#30363d] rounded-lg px-2.5 py-1 text-xs text-gray-300 outline-none focus:border-[#58a6ff]"
-            >
-              <option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
-              <option value="claude-haiku-4-5">Claude Haiku 4.5</option>
-              <option value="claude-claude_anti">Claude Anti</option>
-              <option value="modelapi/gpt-6-sol">GPT-6 Sol</option>
-              <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
-              <option value="openai/gpt-4o">GPT-4o</option>
-            </select>
+
+            <div className="flex items-center gap-4">
+              {/* Context Window Dial Trigger */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowDial(!showDial)}
+                  className="flex items-center gap-2 rounded-lg bg-[#0d1117] border border-[#30363d] px-3 py-1.5 text-xs text-gray-300 hover:text-white transition"
+                  title="Context Window Usage"
+                >
+                  <span className="text-[11px] text-gray-400">Context:</span>
+                  <span className="font-mono font-semibold text-[#58a6ff]">{contextPct}%</span>
+                </button>
+
+                {showDial && (
+                  <div className="absolute right-0 top-11 z-50 rounded-2xl bg-[#161b22] border border-[#30363d] p-4 shadow-2xl flex flex-col items-center">
+                    <p className="text-xs font-medium text-gray-300 mb-2">Context Window Usage</p>
+                    <CometDial
+                      value={contextPct}
+                      size={170}
+                      thickness={4}
+                      accent="#58a6ff"
+                      ink="#fdfdfd"
+                      unit="%"
+                      label="Context Window"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Run Action Button (SpecularButton) */}
+              <SpecularButton
+                size="sm"
+                radius={12}
+                tint="#238636"
+                tintOpacity={0.25}
+                lineColor="#3fb950"
+                baseColor="#2ea043"
+                onClick={handleCreateSession}
+              >
+                <Play className="h-3 w-3 fill-current" />
+                <span>New Run</span>
+              </SpecularButton>
+            </div>
           </header>
 
           {/* Chat Feed */}
           <ChatFeed messages={messages} sessionStatus={activeSession?.status || 'idle'} />
 
-          {/* Input Box */}
-          <footer className="p-4 border-t border-[#30363d] bg-[#161b22]">
-            <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex gap-2">
-              <input
-                type="text"
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Nhập yêu cầu cho Agent trên máy tính (VD: Viết test cho file auth.ts)..."
-                className="flex-1 bg-[#0d1117] border border-[#30363d] rounded-xl px-4 py-2.5 text-xs text-white placeholder-gray-500 outline-none focus:border-[#58a6ff]"
-              />
-              <button
-                type="submit"
-                disabled={!prompt.trim() || !activeSessionId}
-                className="bg-[#238636] hover:bg-[#2ea043] disabled:opacity-40 text-white rounded-xl px-4 py-2.5 flex items-center justify-center transition"
-              >
-                <Send className="h-4 w-4" />
-              </button>
-            </form>
+          {/* PromptBar Footer */}
+          <footer className="p-4 border-t border-[#30363d] bg-[#161b22] flex justify-center">
+            <PromptBar
+              placeholder="Nhập yêu cầu điều khiển máy local (VD: Viết test cho file auth.ts)..."
+              models={MODEL_OPTIONS}
+              defaultModel={selectedModel}
+              busy={activeSession?.status === 'running'}
+              onSend={(text, options) => {
+                if (options?.model?.key && options.model.key !== selectedModel) {
+                  handleModelChange(options.model.key);
+                }
+                handleSendPrompt(text);
+              }}
+              onStop={async () => {
+                if (activeSessionId) {
+                  await supabase.from('sessions').update({ status: 'idle' }).eq('id', activeSessionId);
+                }
+              }}
+              width={840}
+              background="#0d1117"
+              menuBackground="#1c2128"
+              color="#f5f5f5"
+              sparkColor="#58a6ff"
+            />
           </footer>
         </main>
       </div>

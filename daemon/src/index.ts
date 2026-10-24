@@ -114,15 +114,23 @@ export function createCoordinator(options?: {
     }
 
     let accumulatedContent = '';
+    let accumulatedReasoning = '';
 
     try {
-      const result = await agent.runStep(
+      const result = await agent.runLoop(
         conversationHistory,
         async (chunk: string) => {
           accumulatedContent += chunk;
           await supabase
             .from('messages')
             .update({ content: accumulatedContent })
+            .eq('id', assistantMsg.id);
+        },
+        async (rChunk: string) => {
+          accumulatedReasoning += rChunk;
+          await supabase
+            .from('messages')
+            .update({ reasoning: accumulatedReasoning })
             .eq('id', assistantMsg.id);
         },
         async (toolCall) => {
@@ -132,11 +140,12 @@ export function createCoordinator(options?: {
         session?.model || defaultModel
       );
 
-      // Save final content and tool_calls
+      // Save final content, reasoning and tool_calls
       await supabase
         .from('messages')
         .update({
-          content: result.responseText || accumulatedContent,
+          content: result.responseText || accumulatedContent || 'Đã hoàn tất thực thi các công cụ.',
+          reasoning: result.reasoning || accumulatedReasoning,
           tool_calls: result.toolCalls
         })
         .eq('id', assistantMsg.id);
