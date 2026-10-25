@@ -276,9 +276,19 @@ export default function DashboardPage() {
         );
       }
 
+      // Optimistic update so user immediately sees their message
+      const optMsg: Message = {
+        id: `opt-${Date.now()}`,
+        session_id: targetId!,
+        role: 'user',
+        content: text,
+        created_at: new Date().toISOString()
+      };
+      setMessages((prev) => [...prev, optMsg]);
+
       // Insert clean message (only valid schema columns)
       const { error: msgErr } = await supabase.from('messages').insert({
-        session_id: targetId,
+        session_id: targetId!,
         role: 'user',
         content: text
       });

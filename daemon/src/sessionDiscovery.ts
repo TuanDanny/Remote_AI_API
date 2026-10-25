@@ -7,6 +7,8 @@ import { SupabaseClient } from '@supabase/supabase-js';
 
 export interface DiscoveredSession {
   id?: string;
+  cliSessionId?: string;
+  desktopSessionId?: string;
   title: string;
   cwd: string;
   source: 'claude' | 'codex' | 'remoteai';
@@ -32,204 +34,164 @@ export class SessionDiscoveryService {
     return os.homedir();
   }
 
-  async discoverClaudeSessions(targetFolder?: string): Promise<DiscoveredSession[]> {
-    const results: DiscoveredSession[] = [];
-    const claudeProjectsDir = path.join(this.getHomeDir(), '.claude', 'projects');
-
-    if (!fs.existsSync(claudeProjectsDir)) return results;
-
-    const projectDirs = fs.readdirSync(claudeProjectsDir);
-
-    for (const pDir of projectDirs) {
-      const fullProjectDirPath = path.join(claudeProjectsDir, pDir);
-      if (!fs.statSync(fullProjectDirPath).isDirectory()) continue;
-
-      const jsonlFiles = fs.readdirSync(fullProjectDirPath).filter(f => f.endsWith('.jsonl'));
-      for (const jsonlFile of jsonlFiles) {
-        const filePath = path.join(fullProjectDirPath, jsonlFile);
-        try {
-          const sessionData = await this.parseClaudeSessionFile(filePath);
-          if (sessionData && sessionData.messages.length > 0) {
-            if (targetFolder) {
-              const normTarget = path.normalize(targetFolder).toLowerCase();
-              const normSession = path.normalize(sessionData.cwd).toLowerCase();
-              if (normSession !== normTarget && !normSession.startsWith(normTarget + path.sep)) {
-                continue;
-              }
-            }
-            results.push(sessionData);
-          }
-        } catch (err: any) {
-          console.error(`[SessionDiscovery] Error reading ${filePath}:`, err?.message || err);
-        }
+  findClaudeJsonl(cliSessionId: string): string | null {
+    const pDir = path.join(this.getHomeDir(), '.claude', 'projects');
+    if (!fs.existsSync(pDir)) return null;
+    try {
+      const dirs = fs.readdirSync(pDir);
+      for (const d of dirs) {
+        const full = path.join(pDir, d, cliSessionId + '.jsonl');
+        if (fs.existsSync(full)) return full;
       }
-    }
-
-    return results;
+    } catch {}
+    return null;
   }
 
-  private async parseClaudeSessionFile(filePath: string): Promise<DiscoveredSession | null> {
+  async parseClaudeJsonlFile(filePath: string): Promise<Array<{ role: 'user' | 'assistant' | 'system'; content: string; tool_calls?: any[] }>> {
     const fileStream = fs.createReadStream(filePath);
     const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
 
-    const rawMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string; tool_calls?: any[] }> = [];
-    let detectedCwd = '';
-    let firstUserPrompt = '';
-    let currentAssistant: { role: 'assistant'; content: string; tool_calls: any[] } | null = null;
+    const turns: Array<{ role: 'user' | 'assistant' | 'system'; content: string; tool_calls?: any[] }> = [];
+    let curAssistant: { role: 'assistant'; content: string; tool_calls: any[] } | null = null;
 
     for await (const line of rl) {
       if (!line.trim()) continue;
       try {
         const obj = JSON.parse(line);
-        if (obj.cwd && !detectedCwd) {
-          detectedCwd = obj.cwd;
-        }
+        const otype = obj.type;
+        const mcontent = obj.message?.content;
 
-        if (obj.type === 'user' && obj.message?.content) {
-          if (currentAssistant) {
-            rawMessages.push(currentAssistant);
-            currentAssistant = null;
+        // In Claude Code jsonl, tool results come back as user turns with tool_result blocks.
+        // These are internal engine replies, NOT real human messages.
+        const isToolResult = otype === 'user' && Array.isArray(mcontent) && mcontent.some((c: any) => c.type === 'tool_result');
+
+        if (otype === 'user' && !isToolResult && mcontent) {
+          if (curAssistant) {
+            turns.push(curAssistant);
+            curAssistant = null;
           }
-          let text = '';
-          if (typeof obj.message.content === 'string') {
-            text = obj.message.content;
-          } else if (Array.isArray(obj.message.content)) {
-            text = obj.message.content.map((c: any) => c.text || '').join('\n');
+          let text = typeof mcontent === 'string'
+            ? mcontent
+            : Array.isArray(mcontent)
+            ? mcontent.filter((c: any) => c.type === 'text').map((c: any) => c.text || '').join('\n')
+            : '';
+
+          // Remove system reminders
+          text = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+
+          // Exclude internal setup commands
+          if (text && !text.startsWith('Base directory for this skill:') && !text.startsWith('[SYSTEM NOTIFICATION')) {
+            turns.push({ role: 'user', content: text, tool_calls: [] });
           }
-          const cleanText = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
-          if (cleanText) {
-            if (!firstUserPrompt) {
-              firstUserPrompt = cleanText.slice(0, 50).trim();
-            }
-            rawMessages.push({ role: 'user', content: cleanText });
+        } else if (otype === 'assistant' && mcontent) {
+          if (!curAssistant) {
+            curAssistant = { role: 'assistant', content: '', tool_calls: [] };
           }
-        } else if (obj.type === 'assistant' && obj.message?.content) {
-          if (!currentAssistant) {
-            currentAssistant = { role: 'assistant', content: '', tool_calls: [] };
-          }
-          if (Array.isArray(obj.message.content)) {
-            for (const item of obj.message.content) {
-              if (item.type === 'text') currentAssistant.content += item.text;
-              if (item.type === 'tool_use') {
-                currentAssistant.tool_calls.push({ name: item.name, args: item.input });
+          if (typeof mcontent === 'string') {
+            curAssistant.content += (curAssistant.content ? '\n\n' : '') + mcontent;
+          } else if (Array.isArray(mcontent)) {
+            for (const item of mcontent) {
+              if (item.type === 'text' && item.text) {
+                curAssistant.content += (curAssistant.content ? '\n\n' : '') + item.text;
+              } else if (item.type === 'tool_use') {
+                curAssistant.tool_calls.push({
+                  name: item.name,
+                  args: item.input || {}
+                });
               }
             }
-          } else if (typeof obj.message.content === 'string') {
-            currentAssistant.content += obj.message.content;
           }
         }
-      } catch {
-        // ignore malformed json line
-      }
+      } catch {}
     }
 
-    if (currentAssistant) {
-      rawMessages.push(currentAssistant);
+    if (curAssistant) {
+      turns.push(curAssistant);
     }
 
-    // Merge consecutive assistant messages so tools and texts in a turn stay together
-    const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string; tool_calls?: any[] }> = [];
-    for (const m of rawMessages) {
-      const prev = messages[messages.length - 1];
-      if (prev && prev.role === 'assistant' && m.role === 'assistant') {
-        if (m.content) {
-          prev.content += (prev.content ? '\n\n' : '') + m.content;
-        }
-        if (m.tool_calls && m.tool_calls.length > 0) {
-          prev.tool_calls = [...(prev.tool_calls || []), ...m.tool_calls];
-        }
-      } else {
-        messages.push({ ...m, tool_calls: [...(m.tool_calls || [])] });
-      }
-    }
-
-    if (!detectedCwd) {
-      detectedCwd = 'D:\\Project';
-    }
-
-    return {
-      title: firstUserPrompt ? `Claude: ${firstUserPrompt}` : 'Claude Local Session',
-      cwd: detectedCwd,
-      source: 'claude',
-      model: 'ag/claude-opus-4-6-thinking',
-      messages
-    };
+    return turns;
   }
 
-  async discoverCodexSessions(targetFolder?: string): Promise<DiscoveredSession[]> {
+  async discoverClaudeDesktopSessions(): Promise<DiscoveredSession[]> {
     const results: DiscoveredSession[] = [];
-    const queryScriptPath = path.join(process.cwd(), 'src', 'query_codex.py');
-    const fallbackPath = path.join(__dirname, 'query_codex.py');
-    const rootPath = path.join(process.cwd(), 'daemon', 'src', 'query_codex.py');
-    const scriptToRun = fs.existsSync(queryScriptPath)
-      ? queryScriptPath
-      : fs.existsSync(rootPath)
-      ? rootPath
-      : fallbackPath;
+    const base = path.join(this.getHomeDir(), 'AppData', 'Local', 'Claude-3p', 'claude-code-sessions');
+    if (!fs.existsSync(base)) return results;
 
-    if (fs.existsSync(scriptToRun)) {
-      try {
-        const proc = spawnSync('python', [scriptToRun], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
-        if (proc.stdout) {
-          const list = JSON.parse(proc.stdout);
-          for (const item of list) {
-            const cwd = item.cwd || 'D:\\Project';
-            if (targetFolder) {
-              const normTarget = path.normalize(targetFolder).toLowerCase();
-              const normSession = path.normalize(cwd).toLowerCase();
-              if (normSession !== normTarget && !normSession.startsWith(normTarget + path.sep)) {
-                continue;
-              }
+    try {
+      for (const acc of fs.readdirSync(base)) {
+        const accPath = path.join(base, acc);
+        if (!fs.statSync(accPath).isDirectory()) continue;
+        for (const sub of fs.readdirSync(accPath)) {
+          const subPath = path.join(accPath, sub);
+          if (!fs.statSync(subPath).isDirectory()) continue;
+          for (const f of fs.readdirSync(subPath)) {
+            if (f.startsWith('local_') && f.endsWith('.json')) {
+              try {
+                const data = JSON.parse(fs.readFileSync(path.join(subPath, f), 'utf8'));
+                if (!data.isArchived && data.cliSessionId) {
+                  const jsonlPath = this.findClaudeJsonl(data.cliSessionId);
+                  let messages: any[] = [];
+                  if (jsonlPath) {
+                    messages = await this.parseClaudeJsonlFile(jsonlPath);
+                  }
+
+                  results.push({
+                    id: data.sessionId,
+                    cliSessionId: data.cliSessionId,
+                    desktopSessionId: data.sessionId,
+                    title: data.title || 'Claude Session',
+                    cwd: data.cwd || 'D:\\Project',
+                    source: 'claude',
+                    model: data.model || 'ag/claude-opus-4-6-thinking',
+                    messages
+                  });
+                }
+              } catch {}
             }
-            results.push({
-              id: item.id,
-              title: item.title ? `Codex: ${item.title}` : 'Codex Session',
-              cwd: cwd,
-              source: 'codex',
-              model: item.model || 'cx/gpt-6.1-sol',
-              messages: item.first_message ? [{ role: 'user', content: item.first_message }] : []
-            });
           }
-          return results;
         }
-      } catch (err: any) {
-        console.error('[SessionDiscovery] Python Codex query error:', err?.message || err);
       }
+    } catch (err: any) {
+      console.error('[SessionDiscovery] Claude Desktop scan error:', err.message);
     }
 
-    // Fallback if python script not available
-    const indexPath = path.join(this.getHomeDir(), '.codex', 'session_index.jsonl');
-    if (fs.existsSync(indexPath)) {
-      try {
-        const fileStream = fs.createReadStream(indexPath);
-        const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+    return results;
+  }
 
-        for await (const line of rl) {
-          if (!line.trim()) continue;
-          try {
-            const obj = JSON.parse(line);
-            results.push({
-              id: obj.id,
-              title: `Codex: ${obj.thread_name || 'Thread'}`,
-              cwd: targetFolder || 'D:\\Project',
-              source: 'codex',
-              model: 'cx/gpt-6.1-sol',
-              updatedAt: obj.updated_at,
-              messages: []
-            });
-          } catch {}
+  async discoverCodexSessions(): Promise<DiscoveredSession[]> {
+    const results: DiscoveredSession[] = [];
+    const queryScriptPath = path.join(process.cwd(), 'src', 'query_codex.py');
+    const rootPath = path.join(process.cwd(), 'daemon', 'src', 'query_codex.py');
+    const scriptToRun = fs.existsSync(queryScriptPath) ? queryScriptPath : fs.existsSync(rootPath) ? rootPath : null;
+
+    if (!scriptToRun) return results;
+
+    try {
+      const proc = spawnSync('python', [scriptToRun], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+      if (proc.stdout) {
+        const list = JSON.parse(proc.stdout);
+        for (const item of list) {
+          const cwd = item.cwd || 'D:\\Project';
+          results.push({
+            id: item.id,
+            title: item.title ? `Codex: ${item.title}` : 'Codex Session',
+            cwd: cwd,
+            source: 'codex',
+            model: item.model || 'cx/gpt-6.1-sol',
+            messages: item.first_message ? [{ role: 'user', content: item.first_message, tool_calls: [] }] : []
+          });
         }
-      } catch (err: any) {
-        console.error('[SessionDiscovery] Fallback index reading error:', err?.message || err);
       }
+    } catch (err: any) {
+      console.error('[SessionDiscovery] Codex discovery error:', err.message);
     }
 
     return results;
   }
 
   async syncDiscoveredSessionsToSupabase(folder?: string): Promise<number> {
-    const claudeSessions = await this.discoverClaudeSessions(folder);
-    const codexSessions = await this.discoverCodexSessions(folder);
+    const claudeSessions = await this.discoverClaudeDesktopSessions();
+    const codexSessions = await this.discoverCodexSessions();
     const allDiscovered = [...claudeSessions, ...codexSessions];
 
     let syncedCount = 0;
@@ -238,10 +200,12 @@ export class SessionDiscoveryService {
       const meta = JSON.stringify({
         cwd: ds.cwd,
         source: ds.source,
+        cliSessionId: ds.cliSessionId || null,
+        desktopSessionId: ds.desktopSessionId || null,
         isExternal: true
       });
 
-      // Check if session already exists by title and device
+      // Check if session already exists in Supabase
       const { data: existing } = await this.supabase
         .from('sessions')
         .select('id, system_prompt')
@@ -249,72 +213,63 @@ export class SessionDiscoveryService {
         .eq('title', ds.title)
         .maybeSingle();
 
+      let targetSessionId = existing?.id;
+
       if (existing) {
-        // Update cwd and clean up messages if it was previously filled with fragmented tool calls
+        // Update session meta
         await this.supabase
           .from('sessions')
           .update({
             system_prompt: meta,
-            model: ds.model || 'cx/gpt-6.1-sol'
+            model: ds.model || 'ag/claude-opus-4-6-thinking'
           })
           .eq('id', existing.id);
+      } else {
+        // Insert new session
+        const { data: newSession, error: sErr } = await this.supabase
+          .from('sessions')
+          .insert({
+            device_id: this.deviceId,
+            title: ds.title,
+            model: ds.model || 'ag/claude-opus-4-6-thinking',
+            system_prompt: meta,
+            status: 'idle'
+          })
+          .select()
+          .single();
 
-        if (ds.messages.length > 0) {
-          const { count } = await this.supabase
-            .from('messages')
-            .select('*', { count: 'exact', head: true })
-            .eq('session_id', existing.id);
+        if (sErr || !newSession) {
+          console.error('[SessionDiscovery] Insert session error:', sErr?.message);
+          continue;
+        }
+        targetSessionId = newSession.id;
+        syncedCount++;
+      }
 
-          // If messages were fragmented or need refresh
-          if (!count || count < 5 || count > 30) {
-            await this.supabase.from('messages').delete().eq('session_id', existing.id);
-            const recentMessages = ds.messages.slice(-16);
-            for (const m of recentMessages) {
-              await this.supabase.from('messages').insert({
-                session_id: existing.id,
-                role: m.role,
-                content: m.content || '',
-                tool_calls: m.tool_calls || []
-              });
-            }
+      // Sync latest 25 messages if present
+      if (ds.messages.length > 0 && targetSessionId) {
+        const { count } = await this.supabase
+          .from('messages')
+          .select('*', { count: 'exact', head: true })
+          .eq('session_id', targetSessionId);
+
+        // If messages count is significantly different, replace with clean turns
+        if (!count || Math.abs(count - Math.min(ds.messages.length, 25)) > 2) {
+          await this.supabase.from('messages').delete().eq('session_id', targetSessionId);
+          const recent = ds.messages.slice(-25);
+          for (const m of recent) {
+            await this.supabase.from('messages').insert({
+              session_id: targetSessionId,
+              role: m.role,
+              content: m.content || '',
+              tool_calls: m.tool_calls || []
+            });
           }
         }
-        continue;
       }
-
-      // Insert new session with cwd in system_prompt metadata
-      const { data: newSession, error: sErr } = await this.supabase
-        .from('sessions')
-        .insert({
-          device_id: this.deviceId,
-          title: ds.title,
-          model: ds.model || 'cx/gpt-6.1-sol',
-          system_prompt: meta,
-          status: 'idle'
-        })
-        .select()
-        .single();
-
-      if (sErr || !newSession) {
-        console.error('[SessionDiscovery] Insert session error:', sErr?.message);
-        continue;
-      }
-
-      // Sync recent messages (take last 16 merged turns for responsive loading)
-      const recentMessages = ds.messages.slice(-16);
-      for (const m of recentMessages) {
-        await this.supabase.from('messages').insert({
-          session_id: newSession.id,
-          role: m.role,
-          content: m.content || '',
-          tool_calls: m.tool_calls || []
-        });
-      }
-
-      syncedCount++;
     }
 
-    console.log(`[SessionDiscovery] Synced / refreshed external sessions in Supabase.`);
+    console.log(`[SessionDiscovery] Synced ${claudeSessions.length} Claude Desktop + ${codexSessions.length} Codex sessions.`);
     return syncedCount;
   }
 }

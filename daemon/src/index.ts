@@ -1,12 +1,31 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import spawn from 'cross-spawn';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { LocalTools } from './tools.js';
 import { AgentRunner } from './agent.js';
 import { HeartbeatService } from './heartbeat.js';
 import { SessionDiscoveryService } from './sessionDiscovery.js';
 import { PlatformWatcher } from './platformWatcher.js';
+
+function findClaudeBinary(): string {
+  const candidates = [
+    'C:/Users/tuand/AppData/Local/Claude-3p/claude-code/2.1.308/c17a819afb40/claude.exe',
+    path.join(os.homedir(), 'AppData', 'Local', 'Claude-3p', 'claude-code', '2.1.308', 'c17a819afb40', 'claude.exe'),
+    path.join(os.homedir(), '.local', 'bin', 'claude.exe'),
+    path.join(os.homedir(), '.local', 'bin', 'claude'),
+    'claude.exe',
+    'claude'
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return 'claude';
+}
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_KEY || '';
@@ -122,13 +141,14 @@ export function createCoordinator(options?: {
     const activeEffort = messageRow.effort || session?.effort;
 
     // Determine working directory priority: session.system_prompt (cwd) -> session.working_directory -> device.working_directory -> workspaceRoot
-    let activeWorkspace = session?.working_directory;
-    if (!activeWorkspace && session?.system_prompt) {
+    let sessionMeta: any = {};
+    if (session?.system_prompt) {
       try {
-        const meta = JSON.parse(session.system_prompt);
-        if (meta.cwd) activeWorkspace = meta.cwd;
+        sessionMeta = JSON.parse(session.system_prompt);
       } catch {}
     }
+
+    let activeWorkspace = session?.working_directory || sessionMeta.cwd;
     if (!activeWorkspace) {
       const { data: dev } = await supabase
         .from('devices')
@@ -140,6 +160,54 @@ export function createCoordinator(options?: {
       }
     }
     activeWorkspace = activeWorkspace || heartbeat.getWorkingDirectory() || workspaceRoot;
+
+    // DIRECT CLI BRIDGE: If this session is linked to an existing Claude CLI session
+    if (sessionMeta.cliSessionId) {
+      console.log(`[Bridge] Forwarding prompt to local Claude CLI session "${sessionMeta.cliSessionId}" in ${activeWorkspace}...`);
+      const claudeBin = findClaudeBinary();
+      const cliEnv: Record<string, string> = {
+        ...process.env as Record<string, string>,
+        ANTHROPIC_AUTH_TOKEN: routerApiKey || 'sk-3107ddc0b81c7c4b-r57ief-e34d7f3c',
+        ANTHROPIC_BASE_URL: routerBaseUrl || 'http://localhost:20128/v1',
+        CLAUDE_CODE_HOST_AUTH_ENV_VAR: 'ANTHROPIC_AUTH_TOKEN'
+      };
+
+      try {
+        const proc = spawn(claudeBin, ['-p', '--resume', sessionMeta.cliSessionId, userContent], {
+          env: cliEnv,
+          cwd: activeWorkspace
+        });
+
+        proc.stdout?.on('data', async (d) => {
+          accumulatedContent += d.toString();
+          await supabase
+            .from('messages')
+            .update({ content: accumulatedContent })
+            .eq('id', assistantMsg.id);
+        });
+
+        proc.stderr?.on('data', (d) => {
+          console.log('[Claude CLI stderr]:', d.toString().slice(0, 150));
+        });
+
+        await new Promise<void>((resolve) => {
+          proc.on('close', async (code) => {
+            console.log(`[Bridge] Claude CLI session ${sessionMeta.cliSessionId} turn ended with code ${code}`);
+            await supabase
+              .from('messages')
+              .update({
+                content: accumulatedContent.trim() || 'Đã hoàn tất xử lý từ phiên CLI.'
+              })
+              .eq('id', assistantMsg.id);
+            await supabase.from('sessions').update({ status: 'idle' }).eq('id', sessionId);
+            resolve();
+          });
+        });
+        return;
+      } catch (err: any) {
+        console.error('[Bridge] Failed to spawn Claude CLI:', err?.message || err);
+      }
+    }
 
     // Scope tools and agent to activeWorkspace
     const scopedTools = new LocalTools(activeWorkspace);

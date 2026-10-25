@@ -1,5 +1,5 @@
 'use client';
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { Message } from '../../../types';
 import { TerminalCard } from './TerminalCard';
 import { DiffCard } from './DiffCard';
@@ -124,6 +124,20 @@ export function ChatFeed({
     return formatted;
   };
 
+  // Deduplicate consecutive identical messages & filter empty narration
+  const displayMessages = useMemo(() => {
+    const list: Message[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      const prev = list[list.length - 1];
+      if (prev && prev.role === m.role && prev.content.trim() === m.content.trim() && !m.tool_calls?.length) {
+        continue;
+      }
+      list.push(m);
+    }
+    return list;
+  }, [messages]);
+
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4 max-w-4xl mx-auto w-full">
       {/* Session Resume / Context Header Banner */}
@@ -147,13 +161,13 @@ export function ChatFeed({
         </div>
       )}
 
-      {messages.length === 0 ? (
+      {displayMessages.length === 0 ? (
         <div className="h-full flex flex-col items-center justify-center text-center text-gray-500 py-20">
           <p className="text-base font-medium text-gray-300">Phiên làm việc mới</p>
           <p className="text-xs text-gray-400 mt-1">Gửi yêu cầu bên dưới để bắt đầu điều khiển Agent trên máy local</p>
         </div>
       ) : (
-        messages.map((m) => {
+        displayMessages.map((m) => {
           const isUser = m.role === 'user';
           const steps = parseReasoningSteps(m.reasoning);
 

@@ -25,9 +25,9 @@ describe('SessionDiscoveryService Suite', () => {
     assert.ok(service);
   });
 
-  test('discoverClaudeSessions returns array without throwing', async () => {
+  test('discoverClaudeDesktopSessions returns array without throwing', async () => {
     const service = new SessionDiscoveryService(mockSupabase, 'win11-main');
-    const sessions = await service.discoverClaudeSessions();
+    const sessions = await service.discoverClaudeDesktopSessions();
     assert.ok(Array.isArray(sessions));
   });
 
