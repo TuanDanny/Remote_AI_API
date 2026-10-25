@@ -8,17 +8,17 @@ export class PlatformWatcher {
   private isSyncing = false;
   private pollTimer: NodeJS.Timeout | null = null;
   private lastCodexMtime = 0;
-  private claudeWatcher: fs.FSWatcher | null = null;
+  private claudeMtimes = new Map<string, number>();
 
   constructor(discovery: SessionDiscoveryService) {
     this.discovery = discovery;
   }
 
-  start(intervalMs = 3000) {
+  start(intervalMs = 1500) {
     const home = os.homedir();
-    const claudeProjects = path.join(home, '.claude', 'projects');
     const codexWal = path.join(home, '.codex', 'thread_history_1.sqlite-wal');
     const codexState = path.join(home, '.codex', 'state_5.sqlite');
+    const claudeSessionsDir = path.join(home, 'AppData', 'Local', 'Claude-3p', 'claude-code-sessions');
 
     let debounceTimer: NodeJS.Timeout | null = null;
 
@@ -34,48 +34,66 @@ export class PlatformWatcher {
         } finally {
           this.isSyncing = false;
         }
-      }, 800);
+      }, 600);
     };
 
-    // 1. Watch Claude Code projects directory
-    if (fs.existsSync(claudeProjects)) {
+    // Polling-based watcher: Extremely stable on Windows, zero libuv crash risk
+    this.pollTimer = setInterval(async () => {
       try {
-        this.claudeWatcher = fs.watch(claudeProjects, { recursive: true }, (_event, filename) => {
-          if (filename && filename.endsWith('.jsonl')) {
-            scheduleSync();
-          }
-        });
-        console.log('👀 [PlatformWatcher] Watching Claude Code session transcripts in real-time...');
-      } catch (err: any) {
-        console.log('[PlatformWatcher] Claude watch notice:', err.message);
-      }
-    }
+        let changed = false;
 
-    // 2. Poll Codex SQLite WAL / state modification time
-    this.pollTimer = setInterval(() => {
-      try {
-        const fileToCheck = fs.existsSync(codexWal)
+        // 1. Check Claude Code desktop active sessions & their jsonl files
+        if (fs.existsSync(claudeSessionsDir)) {
+          const activeSessions = await this.discovery.discoverClaudeDesktopSessions();
+          for (const s of activeSessions) {
+            if (s.cliSessionId) {
+              const jsonlPath = this.discovery.findClaudeJsonl(s.cliSessionId);
+              if (jsonlPath && fs.existsSync(jsonlPath)) {
+                try {
+                  const mtime = fs.statSync(jsonlPath).mtimeMs;
+                  const prev = this.claudeMtimes.get(jsonlPath) || 0;
+                  if (prev && mtime > prev + 200) {
+                    changed = true;
+                  }
+                  this.claudeMtimes.set(jsonlPath, mtime);
+                } catch {}
+              }
+            }
+          }
+        }
+
+        // 2. Check Codex SQLite WAL / state modification
+        const codexFile = fs.existsSync(codexWal)
           ? codexWal
           : fs.existsSync(codexState)
           ? codexState
           : null;
 
-        if (fileToCheck) {
-          const stat = fs.statSync(fileToCheck);
-          const mtime = stat.mtimeMs;
-          if (this.lastCodexMtime && mtime > this.lastCodexMtime + 500) {
-            scheduleSync();
-          }
-          this.lastCodexMtime = mtime;
+        if (codexFile) {
+          try {
+            const mtime = fs.statSync(codexFile).mtimeMs;
+            if (this.lastCodexMtime && mtime > this.lastCodexMtime + 200) {
+              changed = true;
+            }
+            this.lastCodexMtime = mtime;
+          } catch {}
         }
-      } catch {}
+
+        if (changed) {
+          scheduleSync();
+        }
+      } catch (err: any) {
+        // Silently ignore stat errors during file writes
+      }
     }, intervalMs);
 
-    console.log('👀 [PlatformWatcher] Real-time platform session watcher active.');
+    console.log('👀 [PlatformWatcher] Polling-based real-time watcher active (1500ms).');
   }
 
   stop() {
-    if (this.pollTimer) clearInterval(this.pollTimer);
-    if (this.claudeWatcher) this.claudeWatcher.close();
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
   }
 }
