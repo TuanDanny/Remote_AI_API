@@ -11,13 +11,10 @@
 3. **Strict Folder-Scoped Session Isolation:**
    - Every session must have its exact working directory preserved in `system_prompt` metadata.
    - When filtering by folder (`isSessionInFolder`), only display sessions that belong directly to that folder or its subfolders. Never leak unrelated sessions into foreign folders.
-4. **Router Model Constraints:**
-   - Restrict selectable models to the 5 designated endpoints:
-     1. `cx/gpt-6.1-sol` (GPT-6.1 Sol - Reasoning with Light, Medium, High, XHigh, Max efforts)
-     2. `ag/gemini-3.8-flash-high` (Gemini 3.8 Flash High - Fast)
-     3. `cx/gpt-6-astra` (GPT-6 Astra - Coding & Speed)
-     4. `cx/gpt-6-luna[1m]` (GPT-6 Luna [1M] - 1M Context)
-     5. `ag/claude-opus-4-6-thinking` (Claude Opus 4.6 - Thinking)
+4. **Direct CLI Bridge Architecture (Không chạy Agent riêng biệt trong Daemon):**
+   - Web đóng vai trò giao diện điều khiển (remote control) trực tiếp cho các session CLI / Claude Code Desktop trên máy tính.
+   - Khi có prompt từ Web, Daemon chuyển tiếp trực tiếp vào session CLI qua lệnh `claude -p [--resume <cliSessionId>] "<prompt>"` thay vì gọi qua AI agent riêng lẻ độc lập.
+   - Transcripts được đồng bộ hai chiều thời gian thực qua `PlatformWatcher`.
 5. **No Blind Assumptions:**
    - Always verify daemon live logs in the active terminal tab after changes.
    - Run production builds (`npm run build` in `apps/web`) and daemon unit tests (`npm test` in `daemon`) to ensure zero regression.
@@ -29,10 +26,10 @@
   - `components/ChatFeed.tsx`: Markdown chat container with collapsed tool call accordions
   - `components/SpecularButton.tsx`, `CallChip.tsx`, `CometDial.tsx`, `ThoughtLine.tsx`
 - `daemon/`: Windows Background Daemon
-  - `src/index.ts`: Realtime coordinator syncing with Supabase and executing tools
-  - `src/agent.ts`: Autonomous multi-turn agent loop connecting to 9Router
+  - `src/index.ts`: Realtime coordinator relaying prompts directly to Claude CLI sessions
   - `src/sessionDiscovery.ts`: Local session discovery from Claude Code and Codex
-  - `src/tools.ts`: Sandboxed local tool executors (read, write, edit, list, execute)
+  - `src/platformWatcher.ts`: Real-time watcher syncing session transcripts to Supabase
+  - `src/heartbeat.ts`: Online/offline and working directory reporter
 - `tests/`: Automated test suite
   - `tests/test_remote_ai_e2e.py`: End-to-end Python validation script
 

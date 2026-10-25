@@ -34,8 +34,6 @@ def load_env_file(filepath):
 daemon_env = load_env_file(os.path.join(PROJECT_ROOT, "daemon", ".env"))
 SUPABASE_URL = os.environ.get("SUPABASE_URL", daemon_env.get("SUPABASE_URL", "https://duvwmgrustephydbskao.supabase.co"))
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", daemon_env.get("SUPABASE_KEY", ""))
-ROUTER_URL = os.environ.get("AI_ROUTER_BASE_URL", daemon_env.get("AI_ROUTER_BASE_URL", "http://localhost:20128/v1"))
-ROUTER_KEY = os.environ.get("AI_ROUTER_API_KEY", daemon_env.get("AI_ROUTER_API_KEY", ""))
 
 passed_tests = 0
 failed_tests = 0
@@ -127,29 +125,15 @@ try:
 except Exception as e:
     check("Supabase connection", False, str(e))
 
-# Test 5: 9Router Availability & Target Models
-print("\n5. Testing 9Router Local Service & Target Models...")
-target_models = [
-    "cx/gpt-6.1-sol",
-    "ag/gemini-3.8-flash-high",
-    "cx/gpt-6-astra",
-    "cx/gpt-6-luna[1m]",
-    "ag/claude-opus-4-6-thinking"
+# Test 5: Local Claude CLI Binary Check
+print("\n5. Testing Local Claude CLI Binary Availability...")
+claude_candidates = [
+    "C:/Users/tuand/AppData/Local/Claude-3p/claude-code/2.1.308/c17a819afb40/claude.exe",
+    os.path.expanduser("~/.local/bin/claude.exe"),
+    os.path.expanduser("~/.local/bin/claude")
 ]
-
-try:
-    req = urllib.request.Request(
-        f"{ROUTER_URL}/models",
-        headers={"Authorization": f"Bearer {ROUTER_KEY}"}
-    )
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        m_data = json.loads(resp.read().decode())
-        available_ids = set(m["id"] for m in m_data.get("data", []))
-        check("9Router service online", resp.status == 200, f"{len(available_ids)} models available")
-        for m_id in target_models:
-            check(f"Target model '{m_id}' in 9Router", m_id in available_ids)
-except Exception as e:
-    check("9Router connection", False, str(e))
+found_bin = next((c for c in claude_candidates if os.path.exists(c)), None)
+check("Local Claude CLI binary exists", found_bin is not None, f"Found: {found_bin}")
 
 print("\n" + "=" * 60)
 print(f"Validation Summary: {passed_tests} PASSED, {failed_tests} FAILED")
