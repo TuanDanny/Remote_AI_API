@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import spawn from 'cross-spawn';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
 import { HeartbeatService } from './heartbeat.js';
 import { SessionDiscoveryService } from './sessionDiscovery.js';
 import { PlatformWatcher } from './platformWatcher.js';
@@ -25,8 +25,21 @@ function findClaudeBinary(): string {
   return 'claude';
 }
 
+function findCodexBinary(): string {
+  const candidates = [
+    path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe'),
+    path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'OpenAI', 'Codex', 'bin', 'codex'),
+    'codex.exe',
+    'codex'
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return 'codex';
+}
+
 function getClaudeEnv(): Record<string, string> {
-  const env: Record<string, string> = { ...process.env as Record<string, string> };
+  const env: Record<string, string> = { ...(process.env as Record<string, string>) };
   const base = path.join(os.homedir(), 'AppData', 'Local', 'Claude-3p');
   if (fs.existsSync(base)) {
     try {
@@ -69,13 +82,16 @@ export function createCoordinator(options?: {
   const heartbeat = new HeartbeatService(supabase, deviceId, deviceName, workspaceRoot);
   const discovery = new SessionDiscoveryService(supabase, deviceId);
 
+  // Relay prompt from Web to local CLI / Codex session
   async function handleNewUserMessage(messageRow: any) {
     const sessionId = messageRow.session_id;
     const userContent = messageRow.content;
 
-    console.log(`[Bridge] Processing prompt for session ${sessionId}: "${userContent.slice(0, 50)}..."`);
+    if (!userContent || !userContent.trim()) return;
 
-    // Verify session exists and belongs to this device
+    console.log(`[Bridge] Incoming prompt from Web for session ${sessionId}: "${userContent.slice(0, 50)}..."`);
+
+    // Fetch session details from Supabase
     const { data: session } = await supabase
       .from('sessions')
       .select('*')
@@ -83,28 +99,7 @@ export function createCoordinator(options?: {
       .maybeSingle();
 
     if (session && session.device_id && session.device_id !== deviceId) {
-      console.log(`[Bridge] Skipping session ${sessionId}: assigned to device ${session.device_id}, not ${deviceId}`);
-      return;
-    }
-
-    // Update session status to running
-    await supabase.from('sessions').update({ status: 'running' }).eq('id', sessionId);
-
-    // Create empty assistant response message placeholder in DB
-    const { data: assistantMsg, error: insertErr } = await supabase
-      .from('messages')
-      .insert({
-        session_id: sessionId,
-        role: 'assistant',
-        content: '',
-        tool_calls: []
-      })
-      .select()
-      .single();
-
-    if (insertErr || !assistantMsg) {
-      console.error('[Bridge] Failed to create assistant message placeholder:', insertErr?.message);
-      await supabase.from('sessions').update({ status: 'idle' }).eq('id', sessionId);
+      console.log(`[Bridge] Skipping session ${sessionId}: belongs to ${session.device_id}, not ${deviceId}`);
       return;
     }
 
@@ -115,19 +110,31 @@ export function createCoordinator(options?: {
       } catch {}
     }
 
-    let activeWorkspace = session?.working_directory || sessionMeta.cwd;
-    if (!activeWorkspace) {
-      const { data: dev } = await supabase
-        .from('devices')
-        .select('working_directory')
-        .eq('id', deviceId)
-        .maybeSingle();
-      if (dev?.working_directory) {
-        activeWorkspace = dev.working_directory;
+    const activeWorkspace = session?.working_directory || sessionMeta.cwd || workspaceRoot;
+
+    // 1. RELAY TO CODEX
+    if (sessionMeta.source === 'codex' && sessionMeta.sourceId) {
+      console.log(`[Bridge] Relaying to Codex thread "${sessionMeta.sourceId}"...`);
+      const codexBin = findCodexBinary();
+
+      try {
+        const proc = spawn(codexBin, ['queue', '--thread', sessionMeta.sourceId, '--message', userContent], {
+          cwd: activeWorkspace,
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+
+        proc.on('close', async (code) => {
+          console.log(`[Bridge] Codex queue finished with exit code ${code}`);
+          // Immediate sync to reflect queued state
+          await discovery.syncDiscoveredSessionsToSupabase();
+        });
+        return;
+      } catch (err: any) {
+        console.error('[Bridge] Failed to dispatch to Codex:', err?.message || err);
       }
     }
-    activeWorkspace = activeWorkspace || heartbeat.getWorkingDirectory() || workspaceRoot;
 
+    // 2. RELAY TO CLAUDE CODE
     const claudeBin = findClaudeBinary();
     const cliEnv = getClaudeEnv();
     const cliSessionId = sessionMeta.cliSessionId;
@@ -140,54 +147,28 @@ export function createCoordinator(options?: {
       cliModel = 'claude-haiku-4-5';
     } else if (rawModel.includes('anti')) {
       cliModel = 'claude-claude_anti';
-    } else {
-      cliModel = 'claude-sonnet-4-5';
     }
 
     const cliArgs = cliSessionId
       ? ['-p', '--resume', cliSessionId, '--model', cliModel, userContent]
       : ['-p', '--model', cliModel, userContent];
 
-    console.log(`[Bridge] Invoking Claude CLI (${cliSessionId ? `resuming ${cliSessionId}` : 'new turn'}) model=${cliModel} in "${activeWorkspace}"...`);
-
-    let accumulatedContent = '';
+    console.log(`[Bridge] Relaying to Claude CLI (${cliSessionId ? `resuming ${cliSessionId}` : 'new session'}) in "${activeWorkspace}"...`);
 
     try {
       const proc = spawn(claudeBin, cliArgs, {
         env: cliEnv,
-        cwd: activeWorkspace
+        cwd: activeWorkspace,
+        stdio: ['ignore', 'pipe', 'pipe']
       });
 
-      proc.stdout?.on('data', async (d) => {
-        accumulatedContent += d.toString();
-        await supabase
-          .from('messages')
-          .update({ content: accumulatedContent })
-          .eq('id', assistantMsg.id);
-      });
-
-      proc.stderr?.on('data', (d) => {
-        console.log('[Claude CLI stderr]:', d.toString().slice(0, 150));
-      });
-
-      await new Promise<void>((resolve) => {
-        proc.on('close', async (code) => {
-          console.log(`[Bridge] Claude CLI finished with exit code ${code}`);
-          const finalReply = accumulatedContent.trim() || 'Đã hoàn tất xử lý từ phiên CLI trên máy tính.';
-          await supabase
-            .from('messages')
-            .update({ content: finalReply })
-            .eq('id', assistantMsg.id);
-          await supabase.from('sessions').update({ status: 'idle' }).eq('id', sessionId);
-          resolve();
-        });
+      proc.on('close', async (code) => {
+        console.log(`[Bridge] Claude CLI finished with exit code ${code}`);
+        // Watcher will automatically pick up the new turns written to JSONL
+        await discovery.syncDiscoveredSessionsToSupabase();
       });
     } catch (err: any) {
-      console.error('[Bridge] CLI Execution error:', err?.message || err);
-      await supabase.from('messages').update({
-        content: `Lỗi thực thi từ CLI máy tính: ${err?.message || err}`
-      }).eq('id', assistantMsg.id);
-      await supabase.from('sessions').update({ status: 'idle' }).eq('id', sessionId);
+      console.error('[Bridge] Failed to spawn Claude CLI:', err?.message || err);
     }
   }
 
@@ -200,7 +181,7 @@ export function createCoordinator(options?: {
 }
 
 export async function main() {
-  console.log('🚀 Starting RemoteAI CLI Bridge Daemon on Windows...');
+  console.log('🚀 Starting RemoteAI Simple Bridge Daemon on Windows...');
   console.log(`📂 Workspace Root: ${WORKSPACE_ROOT}`);
 
   let coordinator: ReturnType<typeof createCoordinator>;
@@ -216,20 +197,21 @@ export async function main() {
   await heartbeat.start();
   console.log('🟢 Heartbeat service active (Online).');
 
-  // Discover and sync local Claude Code and Codex sessions
+  // Initial clean sync of all local sessions and messages
   try {
-    console.log('🔍 Discovering existing local Claude & Codex sessions...');
+    console.log('🔍 Syncing local Claude Code & Codex sessions...');
     await discovery.syncDiscoveredSessionsToSupabase();
+    console.log('✅ Local sessions synced to Supabase successfully.');
   } catch (err: any) {
     console.error('[SessionDiscovery] Sync error:', err?.message || err);
   }
 
-  // Start live bi-directional platform session watcher
+  // Start real-time local file watcher (mirrors local chat to web immediately)
   const platformWatcher = new PlatformWatcher(discovery);
-  platformWatcher.start();
+  platformWatcher.start(1500);
 
-  // Subscribe to device updates so heartbeat stays in sync with changes from Web UI
-  const deviceChannel = supabase
+  // Subscribe to device updates from Web UI (working directory changes)
+  supabase
     .channel('devices-channel')
     .on(
       'postgres_changes',
@@ -245,8 +227,8 @@ export async function main() {
     )
     .subscribe();
 
-  // Subscribe to new user messages via Supabase Realtime
-  const channel = supabase
+  // Subscribe to new user messages from Web UI
+  supabase
     .channel('messages-channel')
     .on(
       'postgres_changes',
@@ -262,10 +244,10 @@ export async function main() {
       console.log(`[Realtime] Subscription status: ${status}`);
     });
 
-  console.log('👂 Listening for incoming prompts from Vercel Web to relay directly to CLI...');
+  console.log('👂 Listening for prompts from Web Dashboard...');
 }
 
-if (process.argv[1] && process.argv[1].endsWith('index.ts') || process.argv[1]?.endsWith('index.js')) {
+if (process.argv[1] && (process.argv[1].endsWith('index.ts') || process.argv[1].endsWith('index.js'))) {
   main().catch((err) => {
     console.error('Fatal Daemon Error:', err);
     process.exit(1);

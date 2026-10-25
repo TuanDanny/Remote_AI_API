@@ -294,14 +294,24 @@ export class SessionDiscoveryService {
         syncedCount++;
       }
 
-      // Sync recent turns if present
+      // Sync recent turns dynamically whenever new messages arrive
       if (ds.messages.length > 0 && targetSessionId) {
-        const { count } = await this.supabase
+        const { data: dbMessages } = await this.supabase
           .from('messages')
-          .select('*', { count: 'exact', head: true })
-          .eq('session_id', targetSessionId);
+          .select('id, content, role')
+          .eq('session_id', targetSessionId)
+          .order('created_at', { ascending: true });
 
-        if (!count || count < 3) {
+        const lastDb = dbMessages?.[dbMessages.length - 1];
+        const lastDisc = ds.messages[ds.messages.length - 1];
+
+        const targetCount = Math.min(ds.messages.length, 30);
+        const needsUpdate = !dbMessages || dbMessages.length === 0 ||
+          dbMessages.length !== targetCount ||
+          (lastDb && lastDisc && lastDb.content.trim() !== lastDisc.content.trim());
+
+        if (needsUpdate) {
+          await this.supabase.from('messages').delete().eq('session_id', targetSessionId);
           const recent = ds.messages.slice(-30);
           const batch = recent.map(m => ({
             session_id: targetSessionId,
