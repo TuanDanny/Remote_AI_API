@@ -52,6 +52,15 @@ const COMMON_FOLDERS = [
 export function cleanSessionTitle(rawTitle: string): string {
   if (!rawTitle) return 'Untitled Session';
   let t = rawTitle;
+  // If title contains ChatGPT reference JSON with "title":"..."
+  if (t.includes('"title":"')) {
+    const m = /"title":"([^"]+)"/.exec(t);
+    if (m && m[1]) t = m[1];
+  }
+  if (t.includes('## My request:')) {
+    const parts = t.split('## My request:');
+    t = parts[parts.length - 1];
+  }
   // Strip [Codex], [Claude], [Remote]
   t = t.replace(/^\[(Codex|Claude|Remote)\]\s*/i, '');
   t = t.replace(/^Codex:\s*/i, '').replace(/^Claude:\s*/i, '');
@@ -60,7 +69,8 @@ export function cleanSessionTitle(rawTitle: string): string {
   t = t.replace(/\[@[^\]]+\]/g, '');
   t = t.replace(/plugin:\/\/[^\s\)]+/g, '');
   t = t.replace(/^[#\s]+/, '');
-  t = t.trim();
+  t = t.replace(/\s+/g, ' ').trim();
+  if (t.length > 55) t = t.slice(0, 52) + '...';
   return t || 'Session';
 }
 
