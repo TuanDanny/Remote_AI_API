@@ -7,7 +7,7 @@ import CallChip from './CallChip';
 import ThoughtLine from './ThoughtLine';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Terminal, ChevronDown, Send, Sparkles, CornerDownLeft } from 'lucide-react';
+import { Terminal, ChevronDown, Send, Sparkles, CornerDownLeft, FileText } from 'lucide-react';
 
 interface ChatFeedProps {
   messages: Message[];
@@ -124,19 +124,52 @@ export function ChatFeed({
     return formatted;
   };
 
-  // Deduplicate consecutive identical messages & filter empty narration
+  // Deduplicate consecutive identical messages & filter out CLI noise / model errors
   const displayMessages = useMemo(() => {
     const list: Message[] = [];
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
+      const text = (m.content || '').trim();
+
+      // Filter out model error strings and internal engine notices
+      if (text.includes("There's an issue with the selected model") || text === 'No response requested.') {
+        continue;
+      }
+      if (text.startsWith('Base directory for this skill:') || text.startsWith('[SYSTEM NOTIFICATION')) {
+        continue;
+      }
+      // Filter out raw image markers with no actual text
+      if (text.startsWith('[Image: source:') && text.endsWith(']')) {
+        continue;
+      }
+
       const prev = list[list.length - 1];
-      if (prev && prev.role === m.role && prev.content.trim() === m.content.trim() && !m.tool_calls?.length) {
+      if (prev && prev.role === m.role && prev.content.trim() === text && !m.tool_calls?.length) {
         continue;
       }
       list.push(m);
     }
     return list;
   }, [messages]);
+
+  const parseMessageAttachments = (rawText: string) => {
+    const attachments: Array<{ name: string; type: string }> = [];
+    const fileRegex = /@"([^"]+)"/g;
+    let match;
+    while ((match = fileRegex.exec(rawText)) !== null) {
+      const fullPath = match[1];
+      const fileName = fullPath.split(/[/\\]/).pop() || fullPath;
+      const ext = fileName.split('.').pop()?.toUpperCase() || 'FILE';
+      attachments.push({ name: fileName, type: ext });
+    }
+
+    const clean = rawText
+      .replace(/@"([^"]+)"/g, '')
+      .replace(/\[Image:\s*source:[^\]]+\]/g, '')
+      .trim();
+
+    return { cleanText: clean, attachments };
+  };
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4 max-w-4xl mx-auto w-full">
@@ -170,9 +203,12 @@ export function ChatFeed({
         displayMessages.map((m) => {
           const isUser = m.role === 'user';
           const steps = parseReasoningSteps(m.reasoning);
+          const { cleanText, attachments } = isUser
+            ? parseMessageAttachments(m.content || '')
+            : { cleanText: m.content || '', attachments: [] };
 
           // If assistant message has NO content but has tool calls, render as clean inline trace
-          if (!isUser && !m.content?.trim() && m.tool_calls && m.tool_calls.length > 0) {
+          if (!isUser && !cleanText.trim() && m.tool_calls && m.tool_calls.length > 0) {
             return (
               <div key={m.id} className="flex justify-start my-1 pl-2">
                 <ToolCallsCollapsible toolCalls={m.tool_calls} />
@@ -189,6 +225,22 @@ export function ChatFeed({
                     : 'bg-[#161b22] border border-[#30363d] text-gray-200 rounded-bl-none shadow-sm'
                 }`}
               >
+                {/* User Attachments (e.g. PDF cards) */}
+                {isUser && attachments.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {attachments.map((att, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#0d1117]/80 border border-white/20 text-xs shadow-sm"
+                      >
+                        <FileText className="h-4 w-4 text-rose-400 flex-shrink-0" />
+                        <span className="font-mono text-white text-[11px] truncate max-w-xs">{att.name}</span>
+                        <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-white/20 text-white font-bold">{att.type}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {/* Reasoning / Thought process if available */}
                 {m.reasoning && (
                   <div className="mb-3 pb-2 border-b border-[#30363d]/60">
@@ -210,7 +262,7 @@ export function ChatFeed({
                 )}
 
                 {/* Main Content with GFM & Table support */}
-                {m.content && (
+                {cleanText && (
                   <div className="prose prose-invert prose-xs max-w-none">
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm]}
@@ -228,7 +280,7 @@ export function ChatFeed({
                         )
                       }}
                     >
-                      {formatMarkdownContent(m.content)}
+                      {formatMarkdownContent(cleanText)}
                     </ReactMarkdown>
                   </div>
                 )}

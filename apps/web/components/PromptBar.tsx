@@ -433,8 +433,9 @@ export default function PromptBar({
   };
 
   const send = () => {
-    if (!canSend || busy) return;
-    latest.current.onSend?.(draft.trim(), { attachments, model, effort: level });
+    const text = draft.trim();
+    if (!text && attachments.length === 0) return;
+    latest.current.onSend?.(text, { attachments, model, effort: level });
     setDraft('');
     setAttachments([]);
     setDismissed(false);
@@ -464,7 +465,7 @@ export default function PromptBar({
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (open && list.length) {
+    if (open && list.length && (plusOpen || modelOpen || effortOpen)) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         setActive((cursor + (e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length);
@@ -484,7 +485,7 @@ export default function PromptBar({
       }
       return;
     }
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();
     }
@@ -741,7 +742,7 @@ export default function PromptBar({
             onPointerCancel={up}
             onPointerLeave={up}
             onClick={() => {
-              if (busy) latest.current.onStop?.();
+              if (busy && !draft.trim()) latest.current.onStop?.();
               else send();
             }}
           >

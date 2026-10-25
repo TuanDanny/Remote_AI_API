@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { SupabaseClient } from '@supabase/supabase-js';
 
 export interface DiscoveredSession {
-  id?: string;
+  sourceId: string;
   cliSessionId?: string;
   desktopSessionId?: string;
   title: string;
@@ -19,6 +19,41 @@ export interface DiscoveredSession {
     content: string;
     tool_calls?: any[];
   }>;
+}
+
+function cleanTitle(rawTitle: string): string {
+  if (!rawTitle) return 'Untitled Session';
+  let t = rawTitle.trim();
+
+  if (t.includes('"title":"')) {
+    const m = /"title":"([^"]+)"/.exec(t);
+    if (m && m[1]) t = m[1];
+  }
+  if (t.includes('## My request:')) {
+    const parts = t.split('## My request:');
+    t = parts[parts.length - 1];
+  }
+
+  t = t.replace(/^\[(Codex|Claude|Remote)\]\s*/i, '');
+  t = t.replace(/^Codex:\s*/i, '').replace(/^Claude:\s*/i, '');
+  t = t.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
+  t = t.replace(/\[@[^\]]+\]/g, '');
+  t = t.replace(/plugin:\/\/[^\s\)]+/g, '');
+  t = t.replace(/^[#\s]+/, '');
+  t = t.replace(/\s+/g, ' ').trim();
+  if (t.length > 55) t = t.slice(0, 52) + '...';
+  return t || 'Untitled Session';
+}
+
+function isNoiseMessage(text: string): boolean {
+  if (!text || !text.trim()) return true;
+  const t = text.trim();
+  if (t.includes("There's an issue with the selected model")) return true;
+  if (t === 'No response requested.') return true;
+  if (t.startsWith('Base directory for this skill:')) return true;
+  if (t.startsWith('[SYSTEM NOTIFICATION')) return true;
+  if (t.startsWith('[Image: source:') && t.endsWith(']')) return true;
+  return false;
 }
 
 export class SessionDiscoveryService {
@@ -53,6 +88,7 @@ export class SessionDiscoveryService {
 
     const turns: Array<{ role: 'user' | 'assistant' | 'system'; content: string; tool_calls?: any[] }> = [];
     let curAssistant: { role: 'assistant'; content: string; tool_calls: any[] } | null = null;
+    let firstUserPrompt = '';
 
     for await (const line of rl) {
       if (!line.trim()) continue;
@@ -61,12 +97,10 @@ export class SessionDiscoveryService {
         const otype = obj.type;
         const mcontent = obj.message?.content;
 
-        // In Claude Code jsonl, tool results come back as user turns with tool_result blocks.
-        // These are internal engine replies, NOT real human messages.
         const isToolResult = otype === 'user' && Array.isArray(mcontent) && mcontent.some((c: any) => c.type === 'tool_result');
 
         if (otype === 'user' && !isToolResult && mcontent) {
-          if (curAssistant) {
+          if (curAssistant && curAssistant.content.trim()) {
             turns.push(curAssistant);
             curAssistant = null;
           }
@@ -76,22 +110,26 @@ export class SessionDiscoveryService {
             ? mcontent.filter((c: any) => c.type === 'text').map((c: any) => c.text || '').join('\n')
             : '';
 
-          // Remove system reminders
           text = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+          text = text.replace(/\[Image:\s*source:[^\]]+\]/g, '').trim();
 
-          // Exclude internal setup commands
-          if (text && !text.startsWith('Base directory for this skill:') && !text.startsWith('[SYSTEM NOTIFICATION')) {
-            turns.push({ role: 'user', content: text, tool_calls: [] });
+          if (text && !isNoiseMessage(text)) {
+            const prevUser = turns.filter(t => t.role === 'user').pop();
+            if (!prevUser || prevUser.content !== text) {
+              turns.push({ role: 'user', content: text, tool_calls: [] });
+            }
           }
         } else if (otype === 'assistant' && mcontent) {
           if (!curAssistant) {
             curAssistant = { role: 'assistant', content: '', tool_calls: [] };
           }
           if (typeof mcontent === 'string') {
-            curAssistant.content += (curAssistant.content ? '\n\n' : '') + mcontent;
+            if (!isNoiseMessage(mcontent)) {
+              curAssistant.content += (curAssistant.content ? '\n\n' : '') + mcontent;
+            }
           } else if (Array.isArray(mcontent)) {
             for (const item of mcontent) {
-              if (item.type === 'text' && item.text) {
+              if (item.type === 'text' && item.text && !isNoiseMessage(item.text)) {
                 curAssistant.content += (curAssistant.content ? '\n\n' : '') + item.text;
               } else if (item.type === 'tool_use') {
                 curAssistant.tool_calls.push({
@@ -105,7 +143,7 @@ export class SessionDiscoveryService {
       } catch {}
     }
 
-    if (curAssistant) {
+    if (curAssistant && curAssistant.content.trim()) {
       turns.push(curAssistant);
     }
 
@@ -135,14 +173,16 @@ export class SessionDiscoveryService {
                     messages = await this.parseClaudeJsonlFile(jsonlPath);
                   }
 
+                  const title = cleanTitle(data.title || 'Claude Session');
+
                   results.push({
-                    id: data.sessionId,
+                    sourceId: data.cliSessionId || data.sessionId,
                     cliSessionId: data.cliSessionId,
                     desktopSessionId: data.sessionId,
-                    title: data.title || 'Claude Session',
+                    title: `[Claude] ${title}`,
                     cwd: data.cwd || 'D:\\Project',
                     source: 'claude',
-                    model: data.model || 'ag/claude-opus-4-6-thinking',
+                    model: data.model || 'claude-sonnet-4-5',
                     messages
                   });
                 }
@@ -167,18 +207,17 @@ export class SessionDiscoveryService {
     if (!scriptToRun) return results;
 
     try {
-      const proc = spawnSync('python', [scriptToRun], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+      const proc = spawnSync('python', [scriptToRun], { encoding: 'utf8', maxBuffer: 15 * 1024 * 1024 });
       if (proc.stdout) {
         const list = JSON.parse(proc.stdout);
         for (const item of list) {
-          const cwd = item.cwd || 'D:\\Project';
           results.push({
-            id: item.id,
-            title: item.title ? `Codex: ${item.title}` : 'Codex Session',
-            cwd: cwd,
+            sourceId: item.sourceId || item.id,
+            title: item.title,
+            cwd: item.cwd || 'D:\\Project',
             source: 'codex',
             model: item.model || 'cx/gpt-6.1-sol',
-            messages: item.first_message ? [{ role: 'user', content: item.first_message, tool_calls: [] }] : []
+            messages: item.turns || []
           });
         }
       }
@@ -194,10 +233,26 @@ export class SessionDiscoveryService {
     const codexSessions = await this.discoverCodexSessions();
     const allDiscovered = [...claudeSessions, ...codexSessions];
 
+    // Fetch existing sessions once to prevent ANY duplicate inserts
+    const { data: existingList } = await this.supabase
+      .from('sessions')
+      .select('id, title, system_prompt')
+      .eq('device_id', this.deviceId);
+
+    const existingMap = new Map<string, string>(); // sourceId -> session UUID
+    for (const s of existingList || []) {
+      try {
+        const meta = JSON.parse(s.system_prompt || '{}');
+        const sid = meta.sourceId || meta.cliSessionId || meta.desktopSessionId;
+        if (sid) existingMap.set(sid, s.id);
+      } catch {}
+    }
+
     let syncedCount = 0;
 
     for (const ds of allDiscovered) {
       const meta = JSON.stringify({
+        sourceId: ds.sourceId,
         cwd: ds.cwd,
         source: ds.source,
         cliSessionId: ds.cliSessionId || null,
@@ -205,33 +260,26 @@ export class SessionDiscoveryService {
         isExternal: true
       });
 
-      // Check if session already exists in Supabase
-      const { data: existing } = await this.supabase
-        .from('sessions')
-        .select('id, system_prompt')
-        .eq('device_id', this.deviceId)
-        .eq('title', ds.title)
-        .maybeSingle();
+      let targetSessionId = existingMap.get(ds.sourceId);
 
-      let targetSessionId = existing?.id;
-
-      if (existing) {
-        // Update session meta
+      if (targetSessionId) {
+        // Update session metadata without inserting
         await this.supabase
           .from('sessions')
           .update({
+            title: ds.title,
             system_prompt: meta,
-            model: ds.model || 'ag/claude-opus-4-6-thinking'
+            model: ds.model || 'claude-sonnet-4-5'
           })
-          .eq('id', existing.id);
+          .eq('id', targetSessionId);
       } else {
-        // Insert new session
+        // Insert new session once
         const { data: newSession, error: sErr } = await this.supabase
           .from('sessions')
           .insert({
             device_id: this.deviceId,
             title: ds.title,
-            model: ds.model || 'ag/claude-opus-4-6-thinking',
+            model: ds.model || 'claude-sonnet-4-5',
             system_prompt: meta,
             status: 'idle'
           })
@@ -239,37 +287,33 @@ export class SessionDiscoveryService {
           .single();
 
         if (sErr || !newSession) {
-          console.error('[SessionDiscovery] Insert session error:', sErr?.message);
           continue;
         }
         targetSessionId = newSession.id;
+        existingMap.set(ds.sourceId, newSession.id);
         syncedCount++;
       }
 
-      // Sync latest 25 messages if present
+      // Sync recent turns if present
       if (ds.messages.length > 0 && targetSessionId) {
         const { count } = await this.supabase
           .from('messages')
           .select('*', { count: 'exact', head: true })
           .eq('session_id', targetSessionId);
 
-        // If messages count is significantly different, replace with clean turns
-        if (!count || Math.abs(count - Math.min(ds.messages.length, 25)) > 2) {
-          await this.supabase.from('messages').delete().eq('session_id', targetSessionId);
-          const recent = ds.messages.slice(-25);
-          for (const m of recent) {
-            await this.supabase.from('messages').insert({
-              session_id: targetSessionId,
-              role: m.role,
-              content: m.content || '',
-              tool_calls: m.tool_calls || []
-            });
-          }
+        if (!count || count < 3) {
+          const recent = ds.messages.slice(-30);
+          const batch = recent.map(m => ({
+            session_id: targetSessionId,
+            role: m.role,
+            content: m.content || '',
+            tool_calls: m.tool_calls || []
+          }));
+          await this.supabase.from('messages').insert(batch);
         }
       }
     }
 
-    console.log(`[SessionDiscovery] Synced ${claudeSessions.length} Claude Desktop + ${codexSessions.length} Codex sessions.`);
     return syncedCount;
   }
 }

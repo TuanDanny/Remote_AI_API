@@ -132,11 +132,23 @@ export function createCoordinator(options?: {
     const cliEnv = getClaudeEnv();
     const cliSessionId = sessionMeta.cliSessionId;
 
-    const cliArgs = cliSessionId
-      ? ['-p', '--resume', cliSessionId, userContent]
-      : ['-p', userContent];
+    const rawModel = (session?.model || sessionMeta.model || 'claude-sonnet-4-5').toLowerCase();
+    let cliModel = 'claude-sonnet-4-5';
+    if (rawModel.includes('opus')) {
+      cliModel = 'claude-opus-4-6-thinking';
+    } else if (rawModel.includes('haiku')) {
+      cliModel = 'claude-haiku-4-5';
+    } else if (rawModel.includes('anti')) {
+      cliModel = 'claude-claude_anti';
+    } else {
+      cliModel = 'claude-sonnet-4-5';
+    }
 
-    console.log(`[Bridge] Invoking Claude CLI (${cliSessionId ? `resuming ${cliSessionId}` : 'new turn'}) in "${activeWorkspace}"...`);
+    const cliArgs = cliSessionId
+      ? ['-p', '--resume', cliSessionId, '--model', cliModel, userContent]
+      : ['-p', '--model', cliModel, userContent];
+
+    console.log(`[Bridge] Invoking Claude CLI (${cliSessionId ? `resuming ${cliSessionId}` : 'new turn'}) model=${cliModel} in "${activeWorkspace}"...`);
 
     let accumulatedContent = '';
 
